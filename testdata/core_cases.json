@@ -1,0 +1,27 @@
+{
+  "classification": [
+    {"name": "A exact boundary", "previous": null, "ratio": "0.6000", "volume": 350, "want": "A"},
+    {"name": "A volume below boundary", "previous": null, "ratio": "0.6000", "volume": 349, "want": "B1"},
+    {"name": "B1 exact boundary", "previous": null, "ratio": "0.6300", "volume": 350, "want": "B1"},
+    {"name": "just above B1", "previous": null, "ratio": "0.6301", "volume": 350, "want": "B2"},
+    {"name": "B2 exact boundary", "previous": null, "ratio": "0.6800", "volume": 350, "want": "B2"},
+    {"name": "just above B2", "previous": null, "ratio": "0.6801", "volume": 350, "want": "B3"},
+    {"name": "B3 exact boundary", "previous": null, "ratio": "0.7500", "volume": 350, "want": "B3"},
+    {"name": "just above B3", "previous": null, "ratio": "0.7501", "volume": 350, "want": "C"},
+    {"name": "low A ratio without A volume", "previous": null, "ratio": "0.5900", "volume": 320, "want": "B1"},
+    {"name": "low volume candidate", "previous": null, "ratio": "0.7000", "volume": 100, "want": "C"},
+    {"name": "below B volume", "previous": null, "ratio": "0.5900", "volume": 249, "want": "C"},
+    {"name": "A ratio hysteresis", "previous": "A", "ratio": "0.6050", "volume": 400, "want": "A"},
+    {"name": "A exact keep boundaries", "previous": "A", "ratio": "0.6100", "volume": 320, "want": "A"},
+    {"name": "A exits on ratio", "previous": "A", "ratio": "0.6110", "volume": 400, "want": "B1"},
+    {"name": "A exits on volume", "previous": "A", "ratio": "0.5900", "volume": 319, "want": "B1"},
+    {"name": "non-A cannot use A hysteresis", "previous": "B1", "ratio": "0.6050", "volume": 400, "want": "B1"},
+    {"name": "C can enter A", "previous": "C", "ratio": "0.5900", "volume": 400, "want": "A"}
+  ],
+  "trend": [
+    {"name": "large drop", "previous": "0.7400", "current": "0.7000", "drop": 400, "fast": true},
+    {"name": "small drop", "previous": "0.7000", "current": "0.6800", "drop": 200, "fast": false},
+    {"name": "exact fast boundary", "previous": "0.7300", "current": "0.7000", "drop": 300, "fast": true},
+    {"name": "ratio increase", "previous": "0.6500", "current": "0.6700", "drop": -200, "fast": false}
+  ]
+}
