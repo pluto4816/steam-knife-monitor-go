@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 	"strconv"
 	"strings"
@@ -21,7 +22,9 @@ import (
 const (
 	searchPath   = "/api/commodity/search"
 	exchangePath = "/api/commodity/exchange"
+	detailPath   = "/api/commodity/%d"
 	pageSize     = 50
+	maxRatioBP   = int64(1<<31 - 1)
 
 	// These values are current smis.club frontend behavior verified in the
 	// frozen Python investigation. They may need updating when the site changes.
@@ -170,12 +173,43 @@ func (client *SMISClient) FetchExchangePage(ctx context.Context, page int) (Exch
 	return ExchangePage{Items: items, RawCount: len(rawItems)}, nil
 }
 
+func (client *SMISClient) FetchMarketItem(ctx context.Context, itemID int64) (MarketItem, error) {
+	if itemID <= 0 {
+		return MarketItem{}, fmt.Errorf("item ID must be positive")
+	}
+	path := fmt.Sprintf(detailPath, itemID)
+	data, err := client.get(ctx, path)
+	if err != nil {
+		return MarketItem{}, err
+	}
+	record, ok := data.(map[string]any)
+	if !ok {
+		return MarketItem{}, fmt.Errorf("detail response data must be an object")
+	}
+	item, err := parseDetailMarketItem(record)
+	if err != nil {
+		return MarketItem{}, fmt.Errorf("parse detail item %d: %w", itemID, err)
+	}
+	if item.ItemID != itemID {
+		return MarketItem{}, fmt.Errorf("detail response ID %d does not match requested ID %d", item.ItemID, itemID)
+	}
+	return item, nil
+}
+
+func (client *SMISClient) get(ctx context.Context, path string) (any, error) {
+	return client.request(ctx, http.MethodGet, path, nil)
+}
+
 func (client *SMISClient) post(ctx context.Context, path string, payload any) (any, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("encode request for %s: %w", path, err)
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.baseURL+path, bytes.NewReader(body))
+	return client.request(ctx, http.MethodPost, path, bytes.NewReader(body))
+}
+
+func (client *SMISClient) request(ctx context.Context, method, path string, body io.Reader) (any, error) {
+	request, err := http.NewRequestWithContext(ctx, method, client.baseURL+path, body)
 	if err != nil {
 		return nil, fmt.Errorf("create request for %s: %w", path, err)
 	}
@@ -183,7 +217,9 @@ func (client *SMISClient) post(ctx context.Context, path string, payload any) (a
 	if err != nil {
 		return nil, fmt.Errorf("create Auth header: %w", err)
 	}
-	request.Header.Set("Content-Type", "application/json")
+	if body != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
 	request.Header.Set("Auth", auth)
 	request.Header.Set("Auth2", auth2)
 
@@ -289,6 +325,134 @@ func parseMarketItem(record map[string]any) (MarketItem, bool) {
 		SteamPrice: steamPrice,
 		UpdatedAt:  stringValue(record["updateTime"]),
 	}, true
+}
+
+func parseDetailMarketItem(record map[string]any) (MarketItem, error) {
+	itemID, ok := positiveID(record["id"])
+	if !ok {
+		return MarketItem{}, fmt.Errorf("invalid id")
+	}
+
+	volumeNumber, ok := record["steamTransactionQuantity"].(json.Number)
+	if !ok {
+		return MarketItem{}, fmt.Errorf("steamTransactionQuantity must be an integer number")
+	}
+	volume, err := volumeNumber.Int64()
+	if err != nil || volume < 0 || (strconv.IntSize == 32 && volume > 1<<31-1) {
+		return MarketItem{}, fmt.Errorf("invalid steamTransactionQuantity %q", volumeNumber.String())
+	}
+
+	priceFields := []string{
+		"steamSellPrice", "buffSellPrice", "uuypSellPrice",
+		"c5SellPrice", "igxeSellPrice", "ecoSellPrice",
+	}
+	prices := make([]*big.Rat, 0, len(priceFields))
+	steamPrice := ""
+	for _, field := range priceFields {
+		price, raw, err := parseDetailPrice(record[field], field)
+		if err != nil {
+			return MarketItem{}, err
+		}
+		if field == "steamSellPrice" {
+			steamPrice = raw
+		}
+		prices = append(prices, price)
+	}
+	ratio, err := detailRatioBP(prices)
+	if err != nil {
+		return MarketItem{}, err
+	}
+
+	return MarketItem{
+		ItemID:         itemID,
+		MarketHashName: stringValue(record["hashName"]),
+		NameCN:         stringValue(record["cnName"]),
+		MarketData: core.MarketData{
+			Ratio:            ratio,
+			SteamDailyVolume: int(volume),
+		},
+		SteamPrice: steamPrice,
+		UpdatedAt:  stringValue(record["updateTime"]),
+	}, nil
+}
+
+func parseDetailPrice(value any, field string) (*big.Rat, string, error) {
+	number, ok := value.(json.Number)
+	if !ok {
+		return nil, "", fmt.Errorf("%s must be a number", field)
+	}
+	raw := number.String()
+	price, ok := new(big.Rat).SetString(raw)
+	if !ok || price.Sign() < 0 {
+		return nil, "", fmt.Errorf("invalid %s %q", field, raw)
+	}
+	return price, raw, nil
+}
+
+func detailRatioBP(prices []*big.Rat) (core.RatioBP, error) {
+	if len(prices) == 0 {
+		return 0, fmt.Errorf("detail prices are missing")
+	}
+	var minimum *big.Rat
+	for _, price := range prices {
+		if price != nil && price.Sign() > 0 && (minimum == nil || price.Cmp(minimum) < 0) {
+			minimum = price
+		}
+	}
+	if minimum == nil {
+		return 0, fmt.Errorf("detail has no positive sell price")
+	}
+
+	steamNet := calculateSteamNet(prices[0])
+	if steamNet.Sign() <= 0 {
+		return 0, fmt.Errorf("Steam net price must be positive")
+	}
+	rawRatio := new(big.Rat).Quo(minimum, steamNet)
+	scaled := new(big.Rat).Mul(rawRatio, big.NewRat(10000, 1))
+	quotient, remainder := new(big.Int), new(big.Int)
+	quotient.QuoRem(scaled.Num(), scaled.Denom(), remainder)
+	comparison := new(big.Int).Mul(remainder, big.NewInt(2)).Cmp(scaled.Denom())
+	if comparison == 0 {
+		return 0, fmt.Errorf("exact RatioBP rounding tie is not verified")
+	}
+	if comparison > 0 {
+		quotient.Add(quotient, big.NewInt(1))
+	}
+	if quotient.Sign() < 0 || !quotient.IsInt64() || quotient.Int64() > maxRatioBP {
+		return 0, fmt.Errorf("RatioBP is out of range")
+	}
+	return core.RatioBP(quotient.Int64()), nil
+}
+
+func calculateSteamNet(steamPrice *big.Rat) *big.Rat {
+	if steamPrice == nil || steamPrice.Sign() <= 0 {
+		return new(big.Rat)
+	}
+	divided := new(big.Rat).Quo(
+		new(big.Rat).Mul(steamPrice, big.NewRat(100, 1)),
+		big.NewRat(115, 100),
+	)
+	dividedCents := new(big.Int).Quo(divided.Num(), divided.Denom())
+	dividedPrice := new(big.Rat).SetFrac(dividedCents, big.NewInt(100))
+	minusFee := new(big.Rat).Sub(steamPrice, big.NewRat(14, 100))
+	minimum := dividedPrice
+	if minusFee.Cmp(minimum) < 0 {
+		minimum = minusFee
+	}
+	if minimum.Sign() <= 0 {
+		return new(big.Rat)
+	}
+	cents := roundPositiveRat(new(big.Rat).Mul(minimum, big.NewRat(100, 1)))
+	return new(big.Rat).SetFrac(cents, big.NewInt(100))
+}
+
+func roundPositiveRat(value *big.Rat) *big.Int {
+	quotient, remainder := new(big.Int), new(big.Int)
+	quotient.QuoRem(value.Num(), value.Denom(), remainder)
+	if new(big.Int).Mul(remainder, big.NewInt(2)).Cmp(value.Denom()) >= 0 {
+		quotient.Add(quotient, big.NewInt(1))
+	}
+	return quotient
 }
 
 func positiveID(value any) (int64, bool) {

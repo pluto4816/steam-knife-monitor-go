@@ -112,6 +112,194 @@ func TestFetchCandidatePageEmptyItems(t *testing.T) {
 	}
 }
 
+func TestFetchMarketItemVerifiedRatios(t *testing.T) {
+	tests := []struct {
+		name       string
+		itemID     int64
+		steamPrice string
+		buffPrice  string
+		uuypPrice  string
+		c5Price    string
+		igxePrice  string
+		ecoPrice   string
+		wantRatio  core.RatioBP
+	}{
+		{
+			name: "72825", itemID: 72825, steamPrice: "1157.77",
+			buffPrice: "22.9", uuypPrice: "0", c5Price: "0",
+			igxePrice: "0", ecoPrice: "0", wantRatio: 227,
+		},
+		{
+			name: "76026", itemID: 76026, steamPrice: "12600.0",
+			buffPrice: "9.87", uuypPrice: "8.98", c5Price: "10.0",
+			igxePrice: "0", ecoPrice: "0", wantRatio: 8,
+		},
+		{
+			name: "72299", itemID: 72299, steamPrice: "5433.32",
+			buffPrice: "148.0", uuypPrice: "200.0", c5Price: "100.78",
+			igxePrice: "0", ecoPrice: "0", wantRatio: 213,
+		},
+		{
+			name: "rounds_not_truncates_68632", itemID: 68632, steamPrice: "346.55",
+			buffPrice: "3.52", uuypPrice: "2.78", c5Price: "3.1",
+			igxePrice: "0", ecoPrice: "2.38", wantRatio: 79,
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			var method, path, authHeader, auth2Header string
+			client := testClient(t, func(response http.ResponseWriter, request *http.Request) {
+				method = request.Method
+				path = request.URL.Path
+				authHeader = request.Header.Get("Auth")
+				auth2Header = request.Header.Get("Auth2")
+				body := fmt.Sprintf(`{
+					"code":200,"message":"success","data":{
+						"id":%d,
+						"hashName":"Market Hash %d",
+						"cnName":"中文名 %d",
+						"steamSellPrice":%s,
+						"steamTransactionQuantity":344,
+						"buffSellPrice":%s,
+						"uuypSellPrice":%s,
+						"c5SellPrice":%s,
+						"igxeSellPrice":%s,
+						"ecoSellPrice":%s,
+						"updateTime":"2026-08-19 12:00:00"
+					}}`,
+					testCase.itemID, testCase.itemID, testCase.itemID,
+					testCase.steamPrice, testCase.buffPrice, testCase.uuypPrice,
+					testCase.c5Price, testCase.igxePrice, testCase.ecoPrice,
+				)
+				writeResponse(response, http.StatusOK, "application/json", body)
+			})
+
+			item, err := client.FetchMarketItem(context.Background(), testCase.itemID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if method != http.MethodGet || path != fmt.Sprintf(detailPath, testCase.itemID) {
+				t.Fatalf("request = %s %s, want GET detail path", method, path)
+			}
+			if authHeader == "" || auth2Header != auth2 {
+				t.Fatalf("Auth headers missing or incorrect: Auth=%t Auth2=%q", authHeader != "", auth2Header)
+			}
+			if item.ItemID != testCase.itemID ||
+				item.MarketHashName != fmt.Sprintf("Market Hash %d", testCase.itemID) ||
+				item.NameCN != fmt.Sprintf("中文名 %d", testCase.itemID) {
+				t.Fatalf("unexpected identity: %#v", item)
+			}
+			if item.MarketData.Ratio != testCase.wantRatio {
+				t.Fatalf("RatioBP = %d, want %d", item.MarketData.Ratio, testCase.wantRatio)
+			}
+			if item.MarketData.SteamDailyVolume != 344 {
+				t.Fatalf("volume = %d, want 344", item.MarketData.SteamDailyVolume)
+			}
+			if item.SteamPrice != testCase.steamPrice {
+				t.Fatalf("SteamPrice = %q, want exact JSON text %q", item.SteamPrice, testCase.steamPrice)
+			}
+			if item.UpdatedAt != "2026-08-19 12:00:00" {
+				t.Fatalf("UpdatedAt = %q", item.UpdatedAt)
+			}
+		})
+	}
+}
+
+func TestFetchMarketItemRejectsUnverifiedRoundingTie(t *testing.T) {
+	client := detailResponseClient(t, `{
+		"id":53,"hashName":"Tie","cnName":"Tie",
+		"steamSellPrice":1.15,"steamTransactionQuantity":1,
+		"buffSellPrice":0.00005,"uuypSellPrice":0,"c5SellPrice":0,
+		"igxeSellPrice":0,"ecoSellPrice":0,"updateTime":"2026-08-19 12:00:00"
+	}`)
+	_, err := client.FetchMarketItem(context.Background(), 53)
+	if err == nil || !strings.Contains(err.Error(), "rounding tie") {
+		t.Fatalf("error = %v, want explicit rounding tie error", err)
+	}
+}
+
+func TestFetchMarketItemRejectsInvalidDetail(t *testing.T) {
+	tests := []struct {
+		name      string
+		requestID int64
+		record    string
+		wantError string
+	}{
+		{
+			name: "response ID mismatch", requestID: 53, wantError: "does not match",
+			record: `{"id":54,"steamSellPrice":1.15,"steamTransactionQuantity":1,
+				"buffSellPrice":1,"uuypSellPrice":1,"c5SellPrice":1,"igxeSellPrice":0,"ecoSellPrice":0}`,
+		},
+		{
+			name: "negative volume", requestID: 53, wantError: "steamTransactionQuantity",
+			record: `{"id":53,"steamSellPrice":1.15,"steamTransactionQuantity":-1,
+				"buffSellPrice":1,"uuypSellPrice":1,"c5SellPrice":1,"igxeSellPrice":0,"ecoSellPrice":0}`,
+		},
+		{
+			name: "fractional volume", requestID: 53, wantError: "steamTransactionQuantity",
+			record: `{"id":53,"steamSellPrice":1.15,"steamTransactionQuantity":1.5,
+				"buffSellPrice":1,"uuypSellPrice":1,"c5SellPrice":1,"igxeSellPrice":0,"ecoSellPrice":0}`,
+		},
+		{
+			name: "missing volume", requestID: 53, wantError: "steamTransactionQuantity",
+			record: `{"id":53,"steamSellPrice":1.15,
+				"buffSellPrice":1,"uuypSellPrice":1,"c5SellPrice":1,"igxeSellPrice":0,"ecoSellPrice":0}`,
+		},
+		{
+			name: "Steam net not positive", requestID: 53, wantError: "Steam net price",
+			record: `{"id":53,"steamSellPrice":0,"steamTransactionQuantity":1,
+				"buffSellPrice":1,"uuypSellPrice":1,"c5SellPrice":1,"igxeSellPrice":0,"ecoSellPrice":0}`,
+		},
+		{
+			name: "no positive prices", requestID: 53, wantError: "no positive sell price",
+			record: `{"id":53,"steamSellPrice":0,"steamTransactionQuantity":1,
+				"buffSellPrice":0,"uuypSellPrice":0,"c5SellPrice":0,"igxeSellPrice":0,"ecoSellPrice":0}`,
+		},
+		{
+			name: "malformed price", requestID: 53, wantError: "buffSellPrice must be a number",
+			record: `{"id":53,"steamSellPrice":1.15,"steamTransactionQuantity":1,
+				"buffSellPrice":"1","uuypSellPrice":1,"c5SellPrice":1,"igxeSellPrice":0,"ecoSellPrice":0}`,
+		},
+		{
+			name: "missing price", requestID: 53, wantError: "ecoSellPrice must be a number",
+			record: `{"id":53,"steamSellPrice":1.15,"steamTransactionQuantity":1,
+				"buffSellPrice":1,"uuypSellPrice":1,"c5SellPrice":1,"igxeSellPrice":0}`,
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			client := detailResponseClient(t, testCase.record)
+			_, err := client.FetchMarketItem(context.Background(), testCase.requestID)
+			if err == nil || !strings.Contains(err.Error(), testCase.wantError) {
+				t.Fatalf("error = %v, want substring %q", err, testCase.wantError)
+			}
+		})
+	}
+}
+
+func TestFetchMarketItemRejectsNonpositiveRequestIDWithoutRequest(t *testing.T) {
+	client := NewSMISClient("http://unused.invalid", nil)
+	if _, err := client.FetchMarketItem(context.Background(), 0); err == nil {
+		t.Fatal("item ID zero was accepted")
+	}
+}
+
+func TestFetchMarketItemReusesRestrictionHandling(t *testing.T) {
+	attempts := 0
+	client := testClient(t, func(response http.ResponseWriter, _ *http.Request) {
+		attempts++
+		response.WriteHeader(http.StatusForbidden)
+	})
+	_, err := client.FetchMarketItem(context.Background(), 53)
+	if !errors.Is(err, ErrAccessRestricted) {
+		t.Fatalf("error = %v, want ErrAccessRestricted", err)
+	}
+	if attempts != 1 {
+		t.Fatalf("attempts = %d, want one request and no retry", attempts)
+	}
+}
+
 func TestFetchExchangePageRequestAndExactParsing(t *testing.T) {
 	var method, path string
 	var body map[string]any
@@ -320,6 +508,14 @@ func TestPagesStartAtOne(t *testing.T) {
 	if _, err := client.FetchExchangePage(context.Background(), -1); err == nil {
 		t.Error("negative exchange page was accepted")
 	}
+}
+
+func detailResponseClient(t *testing.T, record string) *SMISClient {
+	t.Helper()
+	return testClient(t, func(response http.ResponseWriter, _ *http.Request) {
+		writeResponse(response, http.StatusOK, "application/json",
+			`{"code":200,"message":"success","data":`+record+`}`)
+	})
 }
 
 func testClient(t *testing.T, handler http.HandlerFunc) *SMISClient {
