@@ -36,11 +36,11 @@ change a tier.
 
 ## Development phases
 
-Work one phase at a time. The current phase is Core only: fixed-point ratio parsing,
-classification, A hysteresis, and ratio trend signals.
+Work one phase at a time. Go Core is complete. The current phase is Collector. Collector
+implementation starts only after the verified API contract has been reviewed and confirmed.
 
-Do not add the smis HTTP client, SQLite, scheduling, notifications, long-running orchestration,
-goroutine workers, web UI, Docker, or CI unless a later user request explicitly starts that
-phase.
+During the Collector phase, do not add SQLite, scheduling, notifications, a long-running app
+loop, goroutine workers, web UI, Docker, or CI. Keep the collector concrete and small; do not
+copy the frozen Python package structure.
 
 Run `gofmt`, `go test ./...`, and `go vet ./...` after relevant changes.

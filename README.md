@@ -2,8 +2,8 @@
 
 A clean Go rewrite of the single-process Steam/CS2 knife-opportunity monitor.
 
-The project is currently in the Core phase: exact ratio parsing, tier classification,
-A hysteresis, and ratio trend rules.
+Go Core is complete. The project is currently confirming the smis.club API contract for the
+Collector phase; Collector implementation has not started.
 
 Run tests:
 

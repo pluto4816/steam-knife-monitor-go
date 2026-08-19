@@ -73,6 +73,6 @@ the stored market state or tier.
 
 ## Current phase boundary
 
-This phase implements only Core types, exact ratio parsing, base classification, A hysteresis,
-and ratio-drop signals. It does not implement HTTP, SQLite, scheduling, notifications, or a
-long-running loop.
+Go Core is complete. The current phase is Collector, beginning with confirmation of the frozen
+Python API evidence before implementation. This phase does not implement SQLite, scheduling,
+notifications, or a long-running app loop.
