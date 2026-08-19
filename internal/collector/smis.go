@@ -42,12 +42,23 @@ type Candidate struct {
 	NameCN string
 }
 
+type CandidatePage struct {
+	Items    []Candidate
+	RawCount int
+}
+
 type MarketItem struct {
 	ItemID         int64
 	MarketHashName string
 	NameCN         string
 	MarketData     core.MarketData
 	SteamPrice     string
+	UpdatedAt      string
+}
+
+type ExchangePage struct {
+	Items    []MarketItem
+	RawCount int
 }
 
 func NewSMISClient(baseURL string, httpClient *http.Client) *SMISClient {
@@ -60,9 +71,9 @@ func NewSMISClient(baseURL string, httpClient *http.Client) *SMISClient {
 	}
 }
 
-func (client *SMISClient) FetchCandidatePage(ctx context.Context, page int) ([]Candidate, error) {
+func (client *SMISClient) FetchCandidatePage(ctx context.Context, page int) (CandidatePage, error) {
 	if page < 1 {
-		return nil, fmt.Errorf("candidate page must be at least 1")
+		return CandidatePage{}, fmt.Errorf("candidate page must be at least 1")
 	}
 	payload := candidateRequest{
 		PageNum:      page,
@@ -79,15 +90,15 @@ func (client *SMISClient) FetchCandidatePage(ctx context.Context, page int) ([]C
 	}
 	data, err := client.post(ctx, searchPath, payload)
 	if err != nil {
-		return nil, err
+		return CandidatePage{}, err
 	}
 	object, ok := data.(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("search response data must be an object")
+		return CandidatePage{}, fmt.Errorf("search response data must be an object")
 	}
 	rawItems, ok := object["items"].([]any)
 	if !ok {
-		return nil, fmt.Errorf("search response data.items must be an array")
+		return CandidatePage{}, fmt.Errorf("search response data.items must be an array")
 	}
 	items := make([]Candidate, 0, len(rawItems))
 	for _, rawItem := range rawItems {
@@ -104,25 +115,25 @@ func (client *SMISClient) FetchCandidatePage(ctx context.Context, page int) ([]C
 			NameCN: stringValue(record["cnName"]),
 		})
 	}
-	return items, nil
+	return CandidatePage{Items: items, RawCount: len(rawItems)}, nil
 }
 
-func (client *SMISClient) FetchExchangePage(ctx context.Context, page int) ([]MarketItem, error) {
+func (client *SMISClient) FetchExchangePage(ctx context.Context, page int) (ExchangePage, error) {
 	if page < 1 {
-		return nil, fmt.Errorf("exchange page must be at least 1")
+		return ExchangePage{}, fmt.Errorf("exchange page must be at least 1")
 	}
 	payload := exchangeRequest{
 		Model:                   0,
 		Platforms:               []string{"buff", "uuyp", "c5", "igxe", "eco"},
 		AppID:                   "730",
-		MinPrice:                json.Number("30"),
-		MaxPrice:                json.Number("5000"),
-		MinTransactionQuantity:  50,
-		MinWeekGrowthRate:       json.Number("-0.1"),
-		MaxWeekGrowthRate:       json.Number("0.1"),
-		MinRate:                 json.Number("0"),
-		MaxRate:                 json.Number("1.5"),
-		MinSteamSellSubBuyRatio: json.Number("0.3"),
+		MinPrice:                nil,
+		MaxPrice:                nil,
+		MinTransactionQuantity:  nil,
+		MinWeekGrowthRate:       nil,
+		MaxWeekGrowthRate:       nil,
+		MinRate:                 nil,
+		MaxRate:                 nil,
+		MinSteamSellSubBuyRatio: nil,
 		TimeAfter:               nil,
 		PageNum:                 page,
 		PageSize:                pageSize,
@@ -139,11 +150,11 @@ func (client *SMISClient) FetchExchangePage(ctx context.Context, page int) ([]Ma
 	}
 	data, err := client.post(ctx, exchangePath, payload)
 	if err != nil {
-		return nil, err
+		return ExchangePage{}, err
 	}
 	rawItems, ok := data.([]any)
 	if !ok {
-		return nil, fmt.Errorf("exchange response data must be an array")
+		return ExchangePage{}, fmt.Errorf("exchange response data must be an array")
 	}
 	items := make([]MarketItem, 0, len(rawItems))
 	for _, rawItem := range rawItems {
@@ -156,7 +167,7 @@ func (client *SMISClient) FetchExchangePage(ctx context.Context, page int) ([]Ma
 			items = append(items, item)
 		}
 	}
-	return items, nil
+	return ExchangePage{Items: items, RawCount: len(rawItems)}, nil
 }
 
 func (client *SMISClient) post(ctx context.Context, path string, payload any) (any, error) {
@@ -276,6 +287,7 @@ func parseMarketItem(record map[string]any) (MarketItem, bool) {
 			SteamDailyVolume: int(volume),
 		},
 		SteamPrice: steamPrice,
+		UpdatedAt:  stringValue(record["updateTime"]),
 	}, true
 }
 
@@ -324,28 +336,28 @@ type candidateRequest struct {
 }
 
 type exchangeRequest struct {
-	Model                   int         `json:"model"`
-	Platforms               []string    `json:"platforms"`
-	AppID                   string      `json:"appid"`
-	MinPrice                json.Number `json:"minPrice"`
-	MaxPrice                json.Number `json:"maxPrice"`
-	MinTransactionQuantity  int         `json:"minTransactionQuantity"`
-	MinWeekGrowthRate       json.Number `json:"minWeekGrowthRate"`
-	MaxWeekGrowthRate       json.Number `json:"maxWeekGrowthRate"`
-	MinRate                 json.Number `json:"minRate"`
-	MaxRate                 json.Number `json:"maxRate"`
-	MinSteamSellSubBuyRatio json.Number `json:"minSteamSellSubBuyRatio"`
-	TimeAfter               *string     `json:"timeAfter"`
-	PageNum                 int         `json:"pageNum"`
-	PageSize                int         `json:"pageSize"`
-	BuffTax                 json.Number `json:"buffTax"`
-	BuffLimit               int         `json:"buffLimit"`
-	UUYPTax                 json.Number `json:"uuypTax"`
-	UUYPLimit               int         `json:"uuypLimit"`
-	C5Tax                   json.Number `json:"c5Tax"`
-	C5Limit                 int         `json:"c5Limit"`
-	IGXETax                 json.Number `json:"igxeTax"`
-	IGXELimit               int         `json:"igxeLimit"`
-	EcoTax                  json.Number `json:"ecoTax"`
-	EcoLimit                int         `json:"ecoLimit"`
+	Model                   int          `json:"model"`
+	Platforms               []string     `json:"platforms"`
+	AppID                   string       `json:"appid"`
+	MinPrice                *json.Number `json:"minPrice"`
+	MaxPrice                *json.Number `json:"maxPrice"`
+	MinTransactionQuantity  *int         `json:"minTransactionQuantity"`
+	MinWeekGrowthRate       *json.Number `json:"minWeekGrowthRate"`
+	MaxWeekGrowthRate       *json.Number `json:"maxWeekGrowthRate"`
+	MinRate                 *json.Number `json:"minRate"`
+	MaxRate                 *json.Number `json:"maxRate"`
+	MinSteamSellSubBuyRatio *json.Number `json:"minSteamSellSubBuyRatio"`
+	TimeAfter               *string      `json:"timeAfter"`
+	PageNum                 int          `json:"pageNum"`
+	PageSize                int          `json:"pageSize"`
+	BuffTax                 json.Number  `json:"buffTax"`
+	BuffLimit               int          `json:"buffLimit"`
+	UUYPTax                 json.Number  `json:"uuypTax"`
+	UUYPLimit               int          `json:"uuypLimit"`
+	C5Tax                   json.Number  `json:"c5Tax"`
+	C5Limit                 int          `json:"c5Limit"`
+	IGXETax                 json.Number  `json:"igxeTax"`
+	IGXELimit               int          `json:"igxeLimit"`
+	EcoTax                  json.Number  `json:"ecoTax"`
+	EcoLimit                int          `json:"ecoLimit"`
 }

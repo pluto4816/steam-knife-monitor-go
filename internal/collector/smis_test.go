@@ -71,7 +71,7 @@ func TestFetchCandidatePageRequestAndResponse(t *testing.T) {
 		`)
 	})
 
-	items, err := client.FetchCandidatePage(context.Background(), 3)
+	page, err := client.FetchCandidatePage(context.Background(), 3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,8 +94,8 @@ func TestFetchCandidatePageRequestAndResponse(t *testing.T) {
 	for _, key := range []string{"typeList", "weaponList", "heroList", "slotList"} {
 		assertStringList(t, body[key], []string{})
 	}
-	if len(items) != 1 || items[0].ItemID != 53 || items[0].NameCN != "AK-47 | 精英之作 (久经沙场)" {
-		t.Fatalf("unexpected candidates: %#v", items)
+	if page.RawCount != 1 || len(page.Items) != 1 || page.Items[0].ItemID != 53 || page.Items[0].NameCN != "AK-47 | 精英之作 (久经沙场)" {
+		t.Fatalf("unexpected candidate page: %#v", page)
 	}
 }
 
@@ -103,12 +103,12 @@ func TestFetchCandidatePageEmptyItems(t *testing.T) {
 	client := testClient(t, func(response http.ResponseWriter, _ *http.Request) {
 		writeResponse(response, http.StatusOK, "application/json", `{"code":200,"message":"success","data":{"items":[]}}`)
 	})
-	items, err := client.FetchCandidatePage(context.Background(), 1)
+	page, err := client.FetchCandidatePage(context.Background(), 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if items == nil || len(items) != 0 {
-		t.Fatalf("items = %#v, want non-nil empty slice", items)
+	if page.RawCount != 0 || page.Items == nil || len(page.Items) != 0 {
+		t.Fatalf("page = %#v, want zero raw count and non-nil empty items", page)
 	}
 }
 
@@ -137,7 +137,7 @@ func TestFetchExchangePageRequestAndExactParsing(t *testing.T) {
 		`)
 	})
 
-	items, err := client.FetchExchangePage(context.Background(), 4)
+	page, err := client.FetchExchangePage(context.Background(), 4)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,23 +149,27 @@ func TestFetchExchangePageRequestAndExactParsing(t *testing.T) {
 	assertNumber(t, body["pageNum"], "4")
 	assertNumber(t, body["pageSize"], "50")
 	assertStringList(t, body["platforms"], []string{"buff", "uuyp", "c5", "igxe", "eco"})
+	for _, key := range []string{
+		"minPrice", "maxPrice", "minTransactionQuantity", "minWeekGrowthRate",
+		"maxWeekGrowthRate", "minRate", "maxRate", "minSteamSellSubBuyRatio", "timeAfter",
+	} {
+		value, exists := body[key]
+		if !exists || value != nil {
+			t.Fatalf("neutral filter %s = %#v, exists=%t; want present JSON null", key, value, exists)
+		}
+	}
 	for key, want := range map[string]string{
-		"minPrice": "30", "maxPrice": "5000", "minTransactionQuantity": "50",
-		"minWeekGrowthRate": "-0.1", "maxWeekGrowthRate": "0.1", "minRate": "0",
-		"maxRate": "1.5", "minSteamSellSubBuyRatio": "0.3", "buffTax": "0.015",
+		"buffTax":   "0.015",
 		"buffLimit": "9999999", "uuypTax": "0.01", "uuypLimit": "9999999",
 		"c5Tax": "0.01", "c5Limit": "100", "igxeTax": "0.006",
 		"igxeLimit": "9999999", "ecoTax": "0", "ecoLimit": "9999999",
 	} {
 		assertNumber(t, body[key], want)
 	}
-	if body["timeAfter"] != nil {
-		t.Fatalf("timeAfter = %#v, want null", body["timeAfter"])
+	if page.RawCount != 1 || len(page.Items) != 1 {
+		t.Fatalf("unexpected exchange page: %#v", page)
 	}
-	if len(items) != 1 {
-		t.Fatalf("got %d items, want 1", len(items))
-	}
-	item := items[0]
+	item := page.Items[0]
 	if item.ItemID != 7 || item.MarketHashName != "1st Lieutenant Farlow | SWAT" || item.NameCN != "第一中尉法洛 | 特警" {
 		t.Fatalf("unexpected identity fields: %#v", item)
 	}
@@ -177,6 +181,9 @@ func TestFetchExchangePageRequestAndExactParsing(t *testing.T) {
 	}
 	if item.SteamPrice != "91.0000" {
 		t.Fatalf("SteamPrice = %q, want exact JSON text", item.SteamPrice)
+	}
+	if item.UpdatedAt != "2026-08-18 16:23:18" {
+		t.Fatalf("UpdatedAt = %q", item.UpdatedAt)
 	}
 }
 
@@ -207,12 +214,12 @@ func TestExchangeSkipsInvalidOrPartialRecords(t *testing.T) {
 				body := `{"code":200,"message":"success","data":[` + testCase.record + `,` + valid + `]}`
 				writeResponse(response, http.StatusOK, "application/json", body)
 			})
-			items, err := client.FetchExchangePage(context.Background(), 1)
+			page, err := client.FetchExchangePage(context.Background(), 1)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(items) != 1 || items[0].ItemID != 9 {
-				t.Fatalf("invalid record was not skipped: %#v", items)
+			if page.RawCount != 2 || len(page.Items) != 1 || page.Items[0].ItemID != 9 {
+				t.Fatalf("invalid record handling = %#v, want raw=2 valid=1", page)
 			}
 		})
 	}
@@ -222,12 +229,12 @@ func TestMissingSteamPriceDoesNotInvalidateMarketData(t *testing.T) {
 	client := testClient(t, func(response http.ResponseWriter, _ *http.Request) {
 		writeResponse(response, http.StatusOK, "application/json", `{"code":200,"data":[{"id":1,"extremeRatio":0.6,"steamTransactionQuantity":350}]}`)
 	})
-	items, err := client.FetchExchangePage(context.Background(), 1)
+	page, err := client.FetchExchangePage(context.Background(), 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(items) != 1 || items[0].SteamPrice != "" {
-		t.Fatalf("unexpected items: %#v", items)
+	if len(page.Items) != 1 || page.Items[0].SteamPrice != "" {
+		t.Fatalf("unexpected page: %#v", page)
 	}
 }
 
