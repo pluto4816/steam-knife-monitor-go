@@ -2,9 +2,8 @@
 
 A clean Go rewrite of the single-process Steam/CS2 knife-opportunity monitor.
 
-Go Core and Collector are complete. The Collector has passed a low-frequency live API smoke
-test. The project is currently defining the minimal SQLite persistence; implementation has not
-started.
+Go Core, Collector, and SQLite persistence are complete. The current App Loop phase handles
+one valid market item at a time; the long-running loop and notifications have not started.
 
 Run tests:
 

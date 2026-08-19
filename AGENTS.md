@@ -36,10 +36,10 @@ change a tier.
 
 ## Development phases
 
-Work one phase at a time. Go Core and Collector are complete. The current phase is SQLite.
+Work one phase at a time. Go Core, Collector, and SQLite are complete. The current phase is
+App Loop.
 
-During the SQLite phase, do not add scheduling, notifications, a long-running app loop,
-goroutine workers, web UI, Docker, or CI. Keep persistence concrete and small; do not copy the
-frozen Python database architecture.
+During the first App Loop step, implement only one-item processing. Do not add scheduling,
+notifications, a long-running loop, goroutine workers, web UI, Docker, or CI.
 
 Run `gofmt`, `go test ./...`, and `go vet ./...` after relevant changes.

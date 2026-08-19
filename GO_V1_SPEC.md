@@ -73,5 +73,6 @@ the stored market state or tier.
 
 ## Current phase boundary
 
-Go Core and Collector are complete. The current phase is SQLite. Scheduling, notifications,
-and the long-running app loop have not started.
+Go Core, Collector, and SQLite are complete. The current phase is App Loop, starting with one
+valid market item at a time. Scheduling, notifications, and the long-running loop have not
+started.
