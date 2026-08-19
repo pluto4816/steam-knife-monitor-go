@@ -97,7 +97,8 @@ func RunScanCycle(
 	})
 
 	for _, itemID := range itemIDs {
-		if _, err := ProcessMarketItem(ctx, stateStore, marketItems[itemID]); err != nil {
+		checkedAt := time.Now().UTC()
+		if _, err := ProcessMarketItem(ctx, stateStore, marketItems[itemID], checkedAt); err != nil {
 			if exchangeErr != nil {
 				return result, fmt.Errorf("%v; process item %d: %w", exchangeErr, itemID, err)
 			}

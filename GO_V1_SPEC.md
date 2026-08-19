@@ -47,9 +47,9 @@ Base periods:
 - B3: 60m
 - C: 240m
 
-A ratio improvement of at least 0.0300 (300 RatioBP) is a fast drop. A later scheduler may use
-50% of the current tier's base period, with A never below 5m. Core only reports the drop and
-whether it is fast.
+A ratio improvement of at least 0.0300 (300 RatioBP) is a fast drop. The scheduler uses 50% of
+the current tier's base period for the next check only, with A never below 5m. Core reports the
+drop and whether it is fast.
 
 ## Notifications
 
@@ -73,6 +73,5 @@ the stored market state or tier.
 
 ## Current phase boundary
 
-Go Core, Collector, and SQLite are complete. The current phase is App Loop, starting with one
-valid market item at a time. Scheduling, notifications, and the long-running loop have not
-started.
+Go Core, Collector, SQLite, Scan Cycle, and Detail Market Fetch are complete. The current phase
+is Tier Scheduler. Notifications and the long-running loop have not started.

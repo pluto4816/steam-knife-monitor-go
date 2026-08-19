@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/pluto4816/steam-knife-monitor-go/internal/core"
 )
@@ -47,6 +48,7 @@ func TestSaveGetAndUpsertItemState(t *testing.T) {
 		SteamDailyVolume: 344,
 		SteamPrice:       "91.0000",
 		Tier:             core.TierB2,
+		NextCheckAt:      time.Date(2026, 8, 19, 23, 10, 0, 123000000, time.FixedZone("UTC+8", 8*60*60)),
 	}
 	if err := store.SaveItemState(ctx, original); err != nil {
 		t.Fatal(err)
@@ -55,15 +57,23 @@ func TestSaveGetAndUpsertItemState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !found || got != original {
-		t.Fatalf("state = %#v, found=%t, want %#v", got, found, original)
+	expectedOriginal := original
+	expectedOriginal.NextCheckAt = original.NextCheckAt.UTC()
+	if !found || got != expectedOriginal {
+		t.Fatalf("state = %#v, found=%t, want %#v", got, found, expectedOriginal)
 	}
-	var ratioType string
-	if err := store.db.QueryRow("SELECT typeof(ratio_bp) FROM item_state WHERE item_id = ?", original.ItemID).Scan(&ratioType); err != nil {
+	if got.NextCheckAt.Location() != time.UTC {
+		t.Fatalf("NextCheckAt location = %v, want UTC", got.NextCheckAt.Location())
+	}
+	var ratioType, nextCheckType string
+	if err := store.db.QueryRow(
+		"SELECT typeof(ratio_bp), typeof(next_check_at) FROM item_state WHERE item_id = ?",
+		original.ItemID,
+	).Scan(&ratioType, &nextCheckType); err != nil {
 		t.Fatal(err)
 	}
-	if ratioType != "integer" {
-		t.Fatalf("ratio_bp SQLite type = %q, want integer", ratioType)
+	if ratioType != "integer" || nextCheckType != "integer" {
+		t.Fatalf("SQLite types ratio=%q next_check=%q, want integer/integer", ratioType, nextCheckType)
 	}
 
 	updated := ItemState{
@@ -74,6 +84,7 @@ func TestSaveGetAndUpsertItemState(t *testing.T) {
 		SteamDailyVolume: 400,
 		SteamPrice:       "",
 		Tier:             core.TierA,
+		NextCheckAt:      time.Date(2026, 8, 19, 15, 5, 0, 0, time.UTC),
 	}
 	if err := store.SaveItemState(ctx, updated); err != nil {
 		t.Fatal(err)
@@ -116,6 +127,7 @@ func TestItemStatePersistsAcrossRestart(t *testing.T) {
 		SteamDailyVolume: 350,
 		SteamPrice:       "17.73",
 		Tier:             core.TierA,
+		NextCheckAt:      time.Date(2026, 8, 19, 15, 5, 0, 0, time.UTC),
 	}
 	first, err := Open(path)
 	if err != nil {
@@ -153,6 +165,7 @@ func TestInvalidStateDoesNotOverwriteValidState(t *testing.T) {
 		SteamDailyVolume: 350,
 		SteamPrice:       "17.73",
 		Tier:             core.TierA,
+		NextCheckAt:      time.Date(2026, 8, 19, 15, 5, 0, 0, time.UTC),
 	}
 	if err := store.SaveItemState(ctx, valid); err != nil {
 		t.Fatal(err)
@@ -162,10 +175,11 @@ func TestInvalidStateDoesNotOverwriteValidState(t *testing.T) {
 		name  string
 		state ItemState
 	}{
-		{"non-positive item ID", ItemState{ItemID: 0, Ratio: 6000, SteamDailyVolume: 350, Tier: core.TierA}},
-		{"negative ratio", ItemState{ItemID: 53, Ratio: -1, SteamDailyVolume: 350, Tier: core.TierA}},
-		{"negative volume", ItemState{ItemID: 53, Ratio: 6000, SteamDailyVolume: -1, Tier: core.TierA}},
-		{"invalid tier", ItemState{ItemID: 53, Ratio: 6000, SteamDailyVolume: 350, Tier: core.Tier("UNKNOWN")}},
+		{"non-positive item ID", ItemState{ItemID: 0, Ratio: 6000, SteamDailyVolume: 350, Tier: core.TierA, NextCheckAt: valid.NextCheckAt}},
+		{"negative ratio", ItemState{ItemID: 53, Ratio: -1, SteamDailyVolume: 350, Tier: core.TierA, NextCheckAt: valid.NextCheckAt}},
+		{"negative volume", ItemState{ItemID: 53, Ratio: 6000, SteamDailyVolume: -1, Tier: core.TierA, NextCheckAt: valid.NextCheckAt}},
+		{"invalid tier", ItemState{ItemID: 53, Ratio: 6000, SteamDailyVolume: 350, Tier: core.Tier("UNKNOWN"), NextCheckAt: valid.NextCheckAt}},
+		{"zero next check time", ItemState{ItemID: 53, Ratio: 6000, SteamDailyVolume: 350, Tier: core.TierA}},
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -180,6 +194,50 @@ func TestInvalidStateDoesNotOverwriteValidState(t *testing.T) {
 				t.Fatalf("valid state changed to %#v, found=%t", got, found)
 			}
 		})
+	}
+}
+
+func TestListDueItemStates(t *testing.T) {
+	stateStore := openTestStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 19, 15, 0, 0, 0, time.UTC)
+	states := []ItemState{
+		testItemState(2, now),
+		testItemState(4, now.Add(time.Millisecond)),
+		testItemState(3, now.Add(-time.Minute)),
+		testItemState(1, now),
+	}
+	for _, state := range states {
+		if err := stateStore.SaveItemState(ctx, state); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	due, err := stateStore.ListDueItemStates(ctx, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantIDs := []int64{3, 1, 2}
+	if len(due) != len(wantIDs) {
+		t.Fatalf("due count = %d, want %d", len(due), len(wantIDs))
+	}
+	for index, wantID := range wantIDs {
+		if due[index].ItemID != wantID {
+			t.Fatalf("due order at %d = %d, want %d", index, due[index].ItemID, wantID)
+		}
+	}
+}
+
+func testItemState(itemID int64, nextCheckAt time.Time) ItemState {
+	return ItemState{
+		ItemID:           itemID,
+		MarketHashName:   "hash",
+		NameCN:           "name",
+		Ratio:            6000,
+		SteamDailyVolume: 350,
+		SteamPrice:       "17.73",
+		Tier:             core.TierA,
+		NextCheckAt:      nextCheckAt,
 	}
 }
 

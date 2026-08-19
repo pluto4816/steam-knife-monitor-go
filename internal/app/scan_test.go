@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/pluto4816/steam-knife-monitor-go/internal/collector"
 	"github.com/pluto4816/steam-knife-monitor-go/internal/core"
@@ -32,6 +33,7 @@ func TestRunScanCycleComplete(t *testing.T) {
 		}
 	})
 	stateStore := openTestStore(t)
+	processingStarted := time.Now().UTC()
 
 	result, err := RunScanCycle(context.Background(), client, stateStore, 0)
 	if err != nil {
@@ -53,6 +55,9 @@ func TestRunScanCycleComplete(t *testing.T) {
 	}
 	if state.Ratio != 6000 || state.SteamDailyVolume != 350 || state.Tier != core.TierA {
 		t.Fatalf("stored matched state = %#v", state)
+	}
+	if state.NextCheckAt.IsZero() || !state.NextCheckAt.After(processingStarted) {
+		t.Fatalf("scan did not initialize a future NextCheckAt: %s", state.NextCheckAt)
 	}
 	if _, found, err := stateStore.GetItemState(context.Background(), 99); err != nil || found {
 		t.Fatalf("unmatched exchange item was stored: found=%t err=%v", found, err)
@@ -183,6 +188,7 @@ func TestRunScanCycleAbsenceDoesNotChangeState(t *testing.T) {
 	original := store.ItemState{
 		ItemID: 53, MarketHashName: "old hash", NameCN: "old name",
 		Ratio: 5900, SteamDailyVolume: 400, SteamPrice: "17.73", Tier: core.TierA,
+		NextCheckAt: testCheckedAt.Add(time.Hour),
 	}
 	saveState(t, stateStore, original)
 
@@ -243,6 +249,7 @@ func TestRunScanCycleProcessesExchangePartialResult(t *testing.T) {
 	absent := store.ItemState{
 		ItemID: 2, MarketHashName: "old hash", NameCN: "old name",
 		Ratio: 5900, SteamDailyVolume: 400, SteamPrice: "20.00", Tier: core.TierA,
+		NextCheckAt: testCheckedAt.Add(time.Hour),
 	}
 	saveState(t, stateStore, absent)
 

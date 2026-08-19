@@ -36,10 +36,10 @@ change a tier.
 
 ## Development phases
 
-Work one phase at a time. Go Core, Collector, and SQLite are complete. The current phase is
-App Loop.
+Work one phase at a time. Go Core, Collector, SQLite, Scan Cycle, and Detail Market Fetch are
+complete. The current phase is Tier Scheduler.
 
-During the first App Loop step, implement only one-item processing. Do not add scheduling,
-notifications, a long-running loop, goroutine workers, web UI, Docker, or CI.
+During the Tier Scheduler phase, do not add notifications, a permanent loop, goroutine workers,
+web UI, Docker, or CI.
 
 Run `gofmt`, `go test ./...`, and `go vet ./...` after relevant changes.

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/pluto4816/steam-knife-monitor-go/internal/core"
@@ -22,7 +23,9 @@ CREATE TABLE IF NOT EXISTS item_state (
                        CHECK (steam_daily_volume >= 0),
     steam_price        TEXT NOT NULL,
     tier               TEXT NOT NULL
-                       CHECK (tier IN ('A', 'B1', 'B2', 'B3', 'C'))
+                       CHECK (tier IN ('A', 'B1', 'B2', 'B3', 'C')),
+    next_check_at      INTEGER NOT NULL
+                       CHECK (next_check_at >= 0)
 );`
 
 const maxRatioBP int64 = 1<<31 - 1
@@ -39,6 +42,7 @@ type ItemState struct {
 	SteamDailyVolume int
 	SteamPrice       string
 	Tier             core.Tier
+	NextCheckAt      time.Time
 }
 
 func Open(path string) (*Store, error) {
@@ -75,15 +79,16 @@ func (store *Store) SaveItemState(ctx context.Context, state ItemState) error {
 	_, err := store.db.ExecContext(ctx, `
 INSERT INTO item_state (
     item_id, market_hash_name, name_cn, ratio_bp,
-    steam_daily_volume, steam_price, tier
-) VALUES (?, ?, ?, ?, ?, ?, ?)
+    steam_daily_volume, steam_price, tier, next_check_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(item_id) DO UPDATE SET
     market_hash_name = excluded.market_hash_name,
     name_cn = excluded.name_cn,
     ratio_bp = excluded.ratio_bp,
     steam_daily_volume = excluded.steam_daily_volume,
     steam_price = excluded.steam_price,
-    tier = excluded.tier`,
+    tier = excluded.tier,
+    next_check_at = excluded.next_check_at`,
 		state.ItemID,
 		state.MarketHashName,
 		state.NameCN,
@@ -91,6 +96,7 @@ ON CONFLICT(item_id) DO UPDATE SET
 		state.SteamDailyVolume,
 		state.SteamPrice,
 		string(state.Tier),
+		state.NextCheckAt.UTC().UnixMilli(),
 	)
 	if err != nil {
 		return fmt.Errorf("save item state %d: %w", state.ItemID, err)
@@ -106,9 +112,10 @@ func (store *Store) GetItemState(ctx context.Context, itemID int64) (ItemState, 
 	var ratio int64
 	var volume int64
 	var tier string
+	var nextCheckAt int64
 	err := store.db.QueryRowContext(ctx, `
 SELECT item_id, market_hash_name, name_cn, ratio_bp,
-       steam_daily_volume, steam_price, tier
+       steam_daily_volume, steam_price, tier, next_check_at
 FROM item_state
 WHERE item_id = ?`, itemID).Scan(
 		&state.ItemID,
@@ -118,6 +125,7 @@ WHERE item_id = ?`, itemID).Scan(
 		&volume,
 		&state.SteamPrice,
 		&tier,
+		&nextCheckAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ItemState{}, false, nil
@@ -131,13 +139,70 @@ WHERE item_id = ?`, itemID).Scan(
 	if volume < 0 || (strconv.IntSize == 32 && volume > 1<<31-1) {
 		return ItemState{}, false, fmt.Errorf("stored item %d has invalid steam daily volume %d", itemID, volume)
 	}
+	if nextCheckAt < 0 {
+		return ItemState{}, false, fmt.Errorf("stored item %d has invalid next check time %d", itemID, nextCheckAt)
+	}
 	state.Ratio = core.RatioBP(ratio)
 	state.SteamDailyVolume = int(volume)
 	state.Tier = core.Tier(tier)
+	state.NextCheckAt = time.UnixMilli(nextCheckAt).UTC()
 	if err := validateState(state); err != nil {
 		return ItemState{}, false, fmt.Errorf("stored item %d is invalid: %w", itemID, err)
 	}
 	return state, true, nil
+}
+
+func (store *Store) ListDueItemStates(ctx context.Context, now time.Time) ([]ItemState, error) {
+	rows, err := store.db.QueryContext(ctx, `
+SELECT item_id, market_hash_name, name_cn, ratio_bp,
+       steam_daily_volume, steam_price, tier, next_check_at
+FROM item_state
+WHERE next_check_at <= ?
+ORDER BY next_check_at ASC, item_id ASC`, now.UTC().UnixMilli())
+	if err != nil {
+		return nil, fmt.Errorf("list due item states: %w", err)
+	}
+	defer rows.Close()
+
+	states := []ItemState{}
+	for rows.Next() {
+		var state ItemState
+		var ratio, volume, nextCheckAt int64
+		var tier string
+		if err := rows.Scan(
+			&state.ItemID,
+			&state.MarketHashName,
+			&state.NameCN,
+			&ratio,
+			&volume,
+			&state.SteamPrice,
+			&tier,
+			&nextCheckAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan due item state: %w", err)
+		}
+		if ratio < 0 || ratio > maxRatioBP {
+			return nil, fmt.Errorf("stored item %d has invalid ratio %d", state.ItemID, ratio)
+		}
+		if volume < 0 || (strconv.IntSize == 32 && volume > 1<<31-1) {
+			return nil, fmt.Errorf("stored item %d has invalid steam daily volume %d", state.ItemID, volume)
+		}
+		if nextCheckAt < 0 {
+			return nil, fmt.Errorf("stored item %d has invalid next check time %d", state.ItemID, nextCheckAt)
+		}
+		state.Ratio = core.RatioBP(ratio)
+		state.SteamDailyVolume = int(volume)
+		state.Tier = core.Tier(tier)
+		state.NextCheckAt = time.UnixMilli(nextCheckAt).UTC()
+		if err := validateState(state); err != nil {
+			return nil, fmt.Errorf("stored item %d is invalid: %w", state.ItemID, err)
+		}
+		states = append(states, state)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list due item states: %w", err)
+	}
+	return states, nil
 }
 
 func (store *Store) Close() error {
@@ -156,6 +221,12 @@ func validateState(state ItemState) error {
 	}
 	if !validTier(state.Tier) {
 		return fmt.Errorf("invalid tier %q", state.Tier)
+	}
+	if state.NextCheckAt.IsZero() {
+		return fmt.Errorf("next check time cannot be zero")
+	}
+	if state.NextCheckAt.UTC().UnixMilli() < 0 {
+		return fmt.Errorf("next check time cannot be before Unix epoch")
 	}
 	return nil
 }
