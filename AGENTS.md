@@ -36,10 +36,10 @@ change a tier.
 
 ## Development phases
 
-Work one phase at a time. Go Core, Collector, SQLite, Scan Cycle, and Detail Market Fetch are
-complete. The current phase is Tier Scheduler.
+Work one phase at a time. Go Core, Collector, SQLite, Scan Cycle, Detail Market Fetch, and Tier
+Scheduler are complete. The current phase is the long-running runtime.
 
-During the Tier Scheduler phase, do not add notifications, a permanent loop, goroutine workers,
-web UI, Docker, or CI.
+During the long-running runtime phase, do not add notifications, goroutine workers, web UI,
+Docker, or CI.
 
 Run `gofmt`, `go test ./...`, and `go vet ./...` after relevant changes.

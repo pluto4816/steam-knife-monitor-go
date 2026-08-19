@@ -73,5 +73,9 @@ the stored market state or tier.
 
 ## Current phase boundary
 
-Go Core, Collector, SQLite, Scan Cycle, and Detail Market Fetch are complete. The current phase
-is Tier Scheduler. Notifications and the long-running loop have not started.
+Go Core, Collector, SQLite, Scan Cycle, Detail Market Fetch, and Tier Scheduler are complete.
+The current phase is the long-running runtime. Notifications have not started.
+
+Runtime defaults are a 24-hour full scan, 60-second due poll, 2-second page delay, 1-second
+detail-request delay, and 5-minute ordinary-error delay. These are conservative V1 operating
+defaults, not smis.club official limits.
