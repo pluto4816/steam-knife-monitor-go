@@ -73,6 +73,5 @@ the stored market state or tier.
 
 ## Current phase boundary
 
-Go Core is complete. The current phase is Collector, beginning with confirmation of the frozen
-Python API evidence before implementation. This phase does not implement SQLite, scheduling,
-notifications, or a long-running app loop.
+Go Core and Collector are complete. The current phase is SQLite. Scheduling, notifications,
+and the long-running app loop have not started.

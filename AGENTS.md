@@ -36,11 +36,10 @@ change a tier.
 
 ## Development phases
 
-Work one phase at a time. Go Core is complete. The current phase is Collector. Collector
-implementation starts only after the verified API contract has been reviewed and confirmed.
+Work one phase at a time. Go Core and Collector are complete. The current phase is SQLite.
 
-During the Collector phase, do not add SQLite, scheduling, notifications, a long-running app
-loop, goroutine workers, web UI, Docker, or CI. Keep the collector concrete and small; do not
-copy the frozen Python package structure.
+During the SQLite phase, do not add scheduling, notifications, a long-running app loop,
+goroutine workers, web UI, Docker, or CI. Keep persistence concrete and small; do not copy the
+frozen Python database architecture.
 
 Run `gofmt`, `go test ./...`, and `go vet ./...` after relevant changes.
