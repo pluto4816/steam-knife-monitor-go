@@ -32,7 +32,7 @@ func TestRunRejectsInvalidConfig(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			config := valid
 			testCase.change(&config)
-			if err := Run(context.Background(), nil, nil, config); err == nil {
+			if err := Run(context.Background(), nil, nil, config, nil); err == nil {
 				t.Fatal("invalid config was accepted")
 			}
 		})
@@ -62,7 +62,7 @@ func TestRunStartsWithFullScanThenProcessesDueItem(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
 	defer cancel()
 
-	if err := Run(ctx, client, stateStore, config); err != nil {
+	if err := Run(ctx, client, stateStore, config, nil); err != nil {
 		t.Fatal(err)
 	}
 	gotRequests := requests.snapshot()
@@ -110,7 +110,7 @@ func TestRunRepeatsFullScanAtInterval(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 85*time.Millisecond)
 	defer cancel()
 
-	if err := Run(ctx, client, openTestStore(t), config); err != nil {
+	if err := Run(ctx, client, openTestStore(t), config, nil); err != nil {
 		t.Fatal(err)
 	}
 	if count := requests.countPath("/api/commodity/search"); count < 2 {
@@ -137,7 +137,7 @@ func TestRunFullScanErrorStillProcessesDueItem(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 70*time.Millisecond)
 	defer cancel()
 
-	if err := Run(ctx, client, stateStore, config); err != nil {
+	if err := Run(ctx, client, stateStore, config, nil); err != nil {
 		t.Fatal(err)
 	}
 	if requests.countPath("/api/commodity/search") != 1 {
@@ -162,7 +162,7 @@ func TestRunFullScanFailureUsesErrorDelay(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 115*time.Millisecond)
 	defer cancel()
 
-	if err := Run(ctx, client, openTestStore(t), config); err != nil {
+	if err := Run(ctx, client, openTestStore(t), config, nil); err != nil {
 		t.Fatal(err)
 	}
 	count := requests.countPath("/api/commodity/search")
@@ -190,7 +190,7 @@ func TestRunDueFailureUsesErrorDelay(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 130*time.Millisecond)
 	defer cancel()
 
-	if err := Run(ctx, client, stateStore, config); err != nil {
+	if err := Run(ctx, client, stateStore, config, nil); err != nil {
 		t.Fatal(err)
 	}
 	detailTimes := requests.timesForPath("/api/commodity/53")
@@ -209,7 +209,7 @@ func TestRunStopsOnAccessRestriction(t *testing.T) {
 		return http.StatusForbidden, "{}"
 	})
 
-	err := Run(context.Background(), client, openTestStore(t), runtimeTestConfig())
+	err := Run(context.Background(), client, openTestStore(t), runtimeTestConfig(), nil)
 	if !errors.Is(err, collector.ErrAccessRestricted) {
 		t.Fatalf("error = %v, want ErrAccessRestricted", err)
 	}
@@ -234,11 +234,75 @@ func TestRunContextCancellationReturnsNil(t *testing.T) {
 	}()
 
 	started := time.Now()
-	if err := Run(ctx, client, openTestStore(t), config); err != nil {
+	if err := Run(ctx, client, openTestStore(t), config, nil); err != nil {
 		t.Fatal(err)
 	}
 	if elapsed := time.Since(started); elapsed > time.Second {
 		t.Fatalf("cancellation took %s", elapsed)
+	}
+}
+
+func TestRunSendsDurablePendingAlerts(t *testing.T) {
+	stateStore := openTestStore(t)
+	ctx := context.Background()
+	if _, err := ProcessMarketItem(ctx, stateStore, marketItem(53, 5900, 400), time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	client, _ := runtimeTestClient(t, func(method, path string, page int) (int, string) {
+		if path == "/api/commodity/search" {
+			return http.StatusOK, "{\"items\":[]}"
+		}
+		return http.StatusInternalServerError, "{}"
+	})
+	sender := &recordingSender{}
+	runCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	if err := Run(runCtx, client, stateStore, runtimeTestConfig(), sender); err != nil {
+		t.Fatal(err)
+	}
+	if len(sender.alerts) != 1 {
+		t.Fatalf("sent alert count = %d, want 1", len(sender.alerts))
+	}
+	alertContext, err := stateStore.GetAlertContext(context.Background(), 53)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if alertContext.HasPending || !alertContext.HasLastSent || alertContext.LastSentRatio != 5900 {
+		t.Fatalf("alert context after runtime send = %#v", alertContext)
+	}
+}
+
+func TestRunNotificationFailureUsesErrorDelayAndKeepsMonitoring(t *testing.T) {
+	stateStore := openTestStore(t)
+	if _, err := ProcessMarketItem(context.Background(), stateStore, marketItem(53, 5900, 400), time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	client, requests := runtimeTestClient(t, func(method, path string, page int) (int, string) {
+		if path == "/api/commodity/search" {
+			return http.StatusOK, "{\"items\":[]}"
+		}
+		return http.StatusInternalServerError, "{}"
+	})
+	sender := &recordingSender{err: errors.New("notification unavailable")}
+	config := runtimeTestConfig()
+	config.FullScanInterval = 15 * time.Millisecond
+	config.DuePollInterval = 5 * time.Millisecond
+	config.ErrorDelay = 45 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), 115*time.Millisecond)
+	defer cancel()
+
+	if err := Run(ctx, client, stateStore, config, sender); err != nil {
+		t.Fatal(err)
+	}
+	if calls := len(sender.alerts); calls < 2 || calls > 4 {
+		t.Fatalf("notification attempts = %d, want 2..4 with error delay", calls)
+	}
+	if scans := requests.countPath("/api/commodity/search"); scans < 2 {
+		t.Fatalf("full scans = %d, want monitoring to continue after sender errors", scans)
+	}
+	if got := len(pendingAlerts(t, stateStore)); got != 1 {
+		t.Fatalf("pending alerts after sender errors = %d, want 1", got)
 	}
 }
 

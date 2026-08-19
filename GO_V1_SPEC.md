@@ -73,8 +73,14 @@ the stored market state or tier.
 
 ## Current phase boundary
 
-Go Core, Collector, SQLite, Scan Cycle, Detail Market Fetch, and Tier Scheduler are complete.
-The current phase is the long-running runtime. Notifications have not started.
+Go Core, Collector, SQLite, Scan Cycle, Detail Market Fetch, Tier Scheduler, and the
+long-running runtime are complete. The current phase is Notification.
+
+Notification intents are durable. The item-state update and optional pending intent are
+committed atomically. Only an alert marked SENT becomes an improvement baseline. Delivery is
+at-least-once: if an external send succeeds but the process stops before SQLite records SENT,
+the pending alert may be sent again after restart. SQLite alone cannot guarantee duplicate-free
+external delivery; that requires idempotency support from the eventual provider.
 
 Runtime defaults are a 24-hour full scan, 60-second due poll, 2-second page delay, 1-second
 detail-request delay, and 5-minute ordinary-error delay. These are conservative V1 operating

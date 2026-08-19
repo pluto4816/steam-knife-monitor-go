@@ -24,6 +24,14 @@ func TestOpenInitializesSchemaAndCanReopen(t *testing.T) {
 	if tableName != "item_state" {
 		t.Fatalf("table = %q, want item_state", tableName)
 	}
+	if err := store.db.QueryRow(
+		"SELECT name FROM sqlite_master WHERE type='table' AND name='alerts'",
+	).Scan(&tableName); err != nil {
+		t.Fatalf("alerts table was not created: %v", err)
+	}
+	if tableName != "alerts" {
+		t.Fatalf("table = %q, want alerts", tableName)
+	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}

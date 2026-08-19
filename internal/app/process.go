@@ -62,7 +62,43 @@ func ProcessMarketItem(
 	}
 	result.NextCheckAt = checkedAt.Add(interval).UTC()
 
-	if err := stateStore.SaveItemState(ctx, store.ItemState{
+	var alertContext store.AlertContext
+	if found && previous.Tier == core.TierA && change.Current == core.TierA {
+		alertContext, err = stateStore.GetAlertContext(ctx, item.ItemID)
+		if err != nil {
+			return ProcessResult{}, fmt.Errorf("get alert context for item %d: %w", item.ItemID, err)
+		}
+	}
+	var lastSuccessfulRatio *core.RatioBP
+	if alertContext.HasLastSent {
+		lastSuccessfulRatio = &alertContext.LastSentRatio
+	}
+	alertKind, shouldAlert, err := core.DecideAlert(
+		previousTier,
+		change.Current,
+		item.MarketData.Ratio,
+		alertContext.HasPending,
+		lastSuccessfulRatio,
+	)
+	if err != nil {
+		return ProcessResult{}, fmt.Errorf("decide alert for item %d: %w", item.ItemID, err)
+	}
+
+	var alertDraft *store.AlertDraft
+	if shouldAlert {
+		var aEntryAlertID *int64
+		if alertKind == core.AlertKindAImprovement {
+			if !alertContext.HasEntry {
+				return ProcessResult{}, fmt.Errorf("item %d has no A-entry alert for improvement", item.ItemID)
+			}
+			entryID := alertContext.AEntryAlertID
+			aEntryAlertID = &entryID
+		}
+		draft := newAlertDraft(item, alertKind, aEntryAlertID, checkedAt)
+		alertDraft = &draft
+	}
+
+	state := store.ItemState{
 		ItemID:           item.ItemID,
 		MarketHashName:   item.MarketHashName,
 		NameCN:           item.NameCN,
@@ -71,7 +107,8 @@ func ProcessMarketItem(
 		SteamPrice:       item.SteamPrice,
 		Tier:             change.Current,
 		NextCheckAt:      result.NextCheckAt,
-	}); err != nil {
+	}
+	if err := stateStore.SaveItemStateAndAlert(ctx, state, alertDraft); err != nil {
 		return ProcessResult{}, fmt.Errorf("save current state for item %d: %w", item.ItemID, err)
 	}
 	return result, nil

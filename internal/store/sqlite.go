@@ -26,7 +26,43 @@ CREATE TABLE IF NOT EXISTS item_state (
                        CHECK (tier IN ('A', 'B1', 'B2', 'B3', 'C')),
     next_check_at      INTEGER NOT NULL
                        CHECK (next_check_at >= 0)
+);
+
+CREATE TABLE IF NOT EXISTS alerts (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id          INTEGER NOT NULL,
+    kind             TEXT NOT NULL
+                     CHECK (kind IN ('A_ENTRY', 'A_IMPROVEMENT')),
+    a_entry_alert_id INTEGER,
+    ratio_bp         INTEGER NOT NULL
+                     CHECK (ratio_bp BETWEEN 0 AND 2147483647),
+    message          TEXT NOT NULL,
+    status           TEXT NOT NULL
+                     CHECK (status IN ('PENDING', 'SENT')),
+    created_at       INTEGER NOT NULL
+                     CHECK (created_at >= 0),
+    sent_at          INTEGER
+                     CHECK (sent_at IS NULL OR sent_at >= 0),
+    CHECK (
+        (kind = 'A_ENTRY' AND a_entry_alert_id IS NULL)
+        OR
+        (kind = 'A_IMPROVEMENT' AND a_entry_alert_id IS NOT NULL)
+    )
 );`
+
+const itemStateUpsert = `
+INSERT INTO item_state (
+    item_id, market_hash_name, name_cn, ratio_bp,
+    steam_daily_volume, steam_price, tier, next_check_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(item_id) DO UPDATE SET
+    market_hash_name = excluded.market_hash_name,
+    name_cn = excluded.name_cn,
+    ratio_bp = excluded.ratio_bp,
+    steam_daily_volume = excluded.steam_daily_volume,
+    steam_price = excluded.steam_price,
+    tier = excluded.tier,
+    next_check_at = excluded.next_check_at`
 
 const maxRatioBP int64 = 1<<31 - 1
 
@@ -76,19 +112,15 @@ func (store *Store) SaveItemState(ctx context.Context, state ItemState) error {
 	if err := validateState(state); err != nil {
 		return err
 	}
-	_, err := store.db.ExecContext(ctx, `
-INSERT INTO item_state (
-    item_id, market_hash_name, name_cn, ratio_bp,
-    steam_daily_volume, steam_price, tier, next_check_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(item_id) DO UPDATE SET
-    market_hash_name = excluded.market_hash_name,
-    name_cn = excluded.name_cn,
-    ratio_bp = excluded.ratio_bp,
-    steam_daily_volume = excluded.steam_daily_volume,
-    steam_price = excluded.steam_price,
-    tier = excluded.tier,
-    next_check_at = excluded.next_check_at`,
+	_, err := store.db.ExecContext(ctx, itemStateUpsert, itemStateArgs(state)...)
+	if err != nil {
+		return fmt.Errorf("save item state %d: %w", state.ItemID, err)
+	}
+	return nil
+}
+
+func itemStateArgs(state ItemState) []interface{} {
+	return []interface{}{
 		state.ItemID,
 		state.MarketHashName,
 		state.NameCN,
@@ -97,11 +129,7 @@ ON CONFLICT(item_id) DO UPDATE SET
 		state.SteamPrice,
 		string(state.Tier),
 		state.NextCheckAt.UTC().UnixMilli(),
-	)
-	if err != nil {
-		return fmt.Errorf("save item state %d: %w", state.ItemID, err)
 	}
-	return nil
 }
 
 func (store *Store) GetItemState(ctx context.Context, itemID int64) (ItemState, bool, error) {

@@ -1,0 +1,79 @@
+package app
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/pluto4816/steam-knife-monitor-go/internal/collector"
+	"github.com/pluto4816/steam-knife-monitor-go/internal/core"
+	"github.com/pluto4816/steam-knife-monitor-go/internal/store"
+)
+
+type Sender interface {
+	Send(ctx context.Context, alert store.Alert) error
+}
+
+type SendResult struct {
+	PendingCount int
+	SentCount    int
+}
+
+func SendPendingAlerts(
+	ctx context.Context,
+	stateStore *store.Store,
+	sender Sender,
+) (SendResult, error) {
+	if sender == nil {
+		return SendResult{}, fmt.Errorf("sender cannot be nil")
+	}
+	alerts, err := stateStore.ListPendingAlerts(ctx)
+	if err != nil {
+		return SendResult{}, fmt.Errorf("list pending alerts: %w", err)
+	}
+	result := SendResult{PendingCount: len(alerts)}
+	for _, alert := range alerts {
+		if err := sender.Send(ctx, alert); err != nil {
+			return result, fmt.Errorf("send alert %d: %w", alert.ID, err)
+		}
+		if err := stateStore.MarkAlertSent(ctx, alert.ID, time.Now().UTC()); err != nil {
+			return result, fmt.Errorf("mark alert %d sent: %w", alert.ID, err)
+		}
+		result.SentCount++
+	}
+	return result, nil
+}
+
+func newAlertDraft(
+	item collector.MarketItem,
+	kind core.AlertKind,
+	aEntryAlertID *int64,
+	createdAt time.Time,
+) store.AlertDraft {
+	return store.AlertDraft{
+		ItemID:        item.ItemID,
+		Kind:          kind,
+		AEntryAlertID: aEntryAlertID,
+		Ratio:         item.MarketData.Ratio,
+		Message:       alertMessage(kind, item),
+		CreatedAt:     createdAt,
+	}
+}
+
+func alertMessage(kind core.AlertKind, item collector.MarketItem) string {
+	return fmt.Sprintf(
+		"Alert: %s\nNameCN: %s\nMarketHashName: %s\nRatio: %s (%d RatioBP)\nSteamDailyVolume: %d\nSteamPrice: %s",
+		kind,
+		item.NameCN,
+		item.MarketHashName,
+		formatRatio(item.MarketData.Ratio),
+		item.MarketData.Ratio,
+		item.MarketData.SteamDailyVolume,
+		item.SteamPrice,
+	)
+}
+
+func formatRatio(ratio core.RatioBP) string {
+	value := int64(ratio)
+	return fmt.Sprintf("%d.%04d", value/10000, value%10000)
+}

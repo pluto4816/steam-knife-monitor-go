@@ -24,12 +24,14 @@ func Run(
 	client *collector.SMISClient,
 	stateStore *store.Store,
 	config RunConfig,
+	sender Sender,
 ) error {
 	if err := validateRunConfig(config); err != nil {
 		return err
 	}
 
 	var nextFullScanAttempt time.Time
+	var nextNotificationAttempt time.Time
 	for {
 		if ctx.Err() != nil {
 			return nil
@@ -70,26 +72,23 @@ func Run(
 			}
 		}
 
-		result, err := RunDueChecks(ctx, client, stateStore, config.RequestDelay)
-		if err != nil {
+		result, dueErr := RunDueChecks(ctx, client, stateStore, config.RequestDelay)
+		nextLoopDelay := config.DuePollInterval
+		if dueErr != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
-			if errors.Is(err, collector.ErrAccessRestricted) {
-				return fmt.Errorf("due checks access restricted: %w", err)
+			if errors.Is(dueErr, collector.ErrAccessRestricted) {
+				return fmt.Errorf("due checks access restricted: %w", dueErr)
 			}
 			log.Printf(
 				"due checks error: due=%d processed=%d: %v",
 				result.DueCount,
 				result.ProcessedCount,
-				err,
+				dueErr,
 			)
-			if err := waitContext(ctx, config.ErrorDelay); err != nil {
-				return nil
-			}
-			continue
-		}
-		if result.DueCount > 0 {
+			nextLoopDelay = config.ErrorDelay
+		} else if result.DueCount > 0 {
 			log.Printf(
 				"due checks complete: due=%d processed=%d",
 				result.DueCount,
@@ -97,7 +96,34 @@ func Run(
 			)
 		}
 
-		if err := waitContext(ctx, config.DuePollInterval); err != nil {
+		now := time.Now().UTC()
+		if sender != nil && (nextNotificationAttempt.IsZero() || !now.Before(nextNotificationAttempt)) {
+			sendResult, err := SendPendingAlerts(ctx, stateStore, sender)
+			completedAt := time.Now().UTC()
+			if err != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
+				log.Printf(
+					"notification send error: pending=%d sent=%d: %v",
+					sendResult.PendingCount,
+					sendResult.SentCount,
+					err,
+				)
+				nextNotificationAttempt = completedAt.Add(config.ErrorDelay)
+			} else {
+				if sendResult.PendingCount > 0 {
+					log.Printf(
+						"notification send complete: pending=%d sent=%d",
+						sendResult.PendingCount,
+						sendResult.SentCount,
+					)
+				}
+				nextNotificationAttempt = time.Time{}
+			}
+		}
+
+		if err := waitContext(ctx, nextLoopDelay); err != nil {
 			return nil
 		}
 	}

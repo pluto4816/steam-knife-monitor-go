@@ -57,7 +57,7 @@ func run() error {
 	httpClient := &http.Client{Timeout: httpTimeout}
 	client := collector.NewSMISClient(smisBaseURL, httpClient)
 	log.Printf("monitor started: database=%s", *dbPath)
-	if err := app.Run(ctx, client, stateStore, defaultRunConfig); err != nil {
+	if err := app.Run(ctx, client, stateStore, defaultRunConfig, nil); err != nil {
 		return err
 	}
 	log.Printf("monitor stopped")

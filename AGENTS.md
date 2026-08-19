@@ -36,10 +36,11 @@ change a tier.
 
 ## Development phases
 
-Work one phase at a time. Go Core, Collector, SQLite, Scan Cycle, Detail Market Fetch, and Tier
-Scheduler are complete. The current phase is the long-running runtime.
+Work one phase at a time. Go Core, Collector, SQLite, Scan Cycle, Detail Market Fetch, Tier
+Scheduler, and the long-running runtime are complete. The current phase is Notification.
 
-During the long-running runtime phase, do not add notifications, goroutine workers, web UI,
-Docker, or CI.
+During the Notification phase, do not add concrete delivery providers, multiple-channel
+routing, goroutine workers, queues, web UI, Docker, or CI unless the user explicitly starts
+that work.
 
 Run `gofmt`, `go test ./...`, and `go vet ./...` after relevant changes.
