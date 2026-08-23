@@ -1,2 +1,11 @@
 .ipynb_checkpoints/
 **/.ipynb_checkpoints/
+
+# Local credentials and default runtime state.
+/.env
+/.env.*
+!/.env.example
+/steam-knife-monitor.db
+/steam-knife-monitor.db-journal
+/steam-knife-monitor.db-shm
+/steam-knife-monitor.db-wal

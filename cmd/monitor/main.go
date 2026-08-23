@@ -44,6 +44,12 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	httpClient := &http.Client{Timeout: httpTimeout}
+	sender, err := newQQSenderFromEnv(httpClient)
+	if err != nil {
+		return err
+	}
+
 	stateStore, err := store.Open(*dbPath)
 	if err != nil {
 		return fmt.Errorf("open state store: %w", err)
@@ -54,12 +60,27 @@ func run() error {
 		}
 	}()
 
-	httpClient := &http.Client{Timeout: httpTimeout}
 	client := collector.NewSMISClient(smisBaseURL, httpClient)
 	log.Printf("monitor started: database=%s", *dbPath)
-	if err := app.Run(ctx, client, stateStore, defaultRunConfig, nil); err != nil {
+	if err := app.Run(ctx, client, stateStore, defaultRunConfig, sender); err != nil {
 		return err
 	}
 	log.Printf("monitor stopped")
 	return nil
+}
+
+func newQQSenderFromEnv(httpClient *http.Client) (*app.QQBotSender, error) {
+	sender, err := app.NewQQBotSender(
+		os.Getenv("QQ_BOT_APP_ID"),
+		os.Getenv("QQ_BOT_APP_SECRET"),
+		os.Getenv("QQ_BOT_USER_OPENID"),
+		httpClient,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"configure QQ sender from QQ_BOT_APP_ID, QQ_BOT_APP_SECRET, and QQ_BOT_USER_OPENID: %w",
+			err,
+		)
+	}
+	return sender, nil
 }

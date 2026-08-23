@@ -62,6 +62,25 @@ drop and whether it is fast.
 - Only a successfully sent alert becomes the next improvement baseline.
 - `needs_verification=true` blocks new notifications.
 
+Notification Phase 1 is complete: notification intents are durable, and the item-state update
+and optional pending intent are committed atomically. Only an alert marked SENT becomes an
+improvement baseline.
+
+QQ official bot C2C messaging is the only V1 notification channel. The production sender:
+
+- reads `QQ_BOT_APP_ID`, `QQ_BOT_APP_SECRET`, and `QQ_BOT_USER_OPENID` from the environment;
+- obtains an Access Token with `POST https://api.bot.qq.com/app/getAppAccessToken`;
+- caches the token according to the returned `expires_in` and refreshes within 60 seconds of
+  expiry;
+- sends the persisted alert message with `POST /v2/users/{user_openid}/messages` and
+  `msg_type=0`;
+- performs no background refresh or internal retry.
+
+The AppSecret and Access Token must never be committed or logged. Delivery remains
+at-least-once: if an external send succeeds but the process stops before SQLite records SENT,
+the pending alert may be sent again after restart. The active C2C API does not provide the
+idempotency guarantee needed to remove that window.
+
 ## Data acquisition rules
 
 Use the already verified smis.club normal web API behavior. Use low-frequency requests,
@@ -73,14 +92,16 @@ the stored market state or tier.
 
 ## Current phase boundary
 
-Go Core, Collector, SQLite, Scan Cycle, Detail Market Fetch, Tier Scheduler, and the
-long-running runtime are complete. The current phase is Notification.
+Go Core, Collector, SQLite, Scan Cycle, Detail Market Fetch, Tier Scheduler, the long-running
+runtime, Notification Phase 1, and the QQ official sender are complete.
 
-Notification intents are durable. The item-state update and optional pending intent are
-committed atomically. Only an alert marked SENT becomes an improvement baseline. Delivery is
-at-least-once: if an external send succeeds but the process stops before SQLite records SENT,
-the pending alert may be sent again after restart. SQLite alone cannot guarantee duplicate-free
-external delivery; that requires idempotency support from the eventual provider.
+The frozen binding probe verified the HTTP Access Token and active C2C API path: token
+acquisition succeeded, the send returned HTTP 200 with QQ API success, and the bound user
+received the message.
+
+The production program needs only the QQ HTTP Token and active C2C message APIs. Binding has
+already established the single user's openid; production must not add a WebSocket Gateway,
+event listener, heartbeat, or binding service.
 
 Runtime defaults are a 24-hour full scan, 60-second due poll, 2-second page delay, 1-second
 detail-request delay, and 5-minute ordinary-error delay. These are conservative V1 operating

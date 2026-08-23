@@ -12,7 +12,7 @@ asks.
 ## V1 constraints
 
 The production target is one server, one process, one user, one notification channel, SQLite,
-and one Go executable.
+and one Go executable. QQ official bot C2C messaging is the only V1 notification channel.
 
 Prefer standard-library functions and concrete types. Add an interface only when there are two
 current implementations or when testing an external side effect clearly requires one.
@@ -37,10 +37,15 @@ change a tier.
 ## Development phases
 
 Work one phase at a time. Go Core, Collector, SQLite, Scan Cycle, Detail Market Fetch, Tier
-Scheduler, and the long-running runtime are complete. The current phase is Notification.
+Scheduler, the long-running runtime, Notification Phase 1, and the QQ official sender are
+complete.
 
-During the Notification phase, do not add concrete delivery providers, multiple-channel
-routing, goroutine workers, queues, web UI, Docker, or CI unless the user explicitly starts
-that work.
+For V1, do not add another delivery provider, multiple-channel routing, goroutine workers,
+queues, web UI, Docker, or CI unless the user explicitly starts that work. The production sender
+uses only the QQ HTTP Access Token and active C2C message APIs; do not add the binding probe's
+WebSocket Gateway code to the production program.
+
+Production QQ credentials come only from `QQ_BOT_APP_ID`, `QQ_BOT_APP_SECRET`, and
+`QQ_BOT_USER_OPENID`. The AppSecret must never be committed or logged.
 
 Run `gofmt`, `go test ./...`, and `go vet ./...` after relevant changes.
