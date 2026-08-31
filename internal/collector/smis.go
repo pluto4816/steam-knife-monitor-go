@@ -24,6 +24,7 @@ const (
 	exchangePath = "/api/commodity/exchange"
 	detailPath   = "/api/commodity/%d"
 	pageSize     = 50
+	SMISPageSize = pageSize
 	maxRatioBP   = int64(1<<31 - 1)
 
 	// These values are current smis.club frontend behavior verified in the
@@ -48,6 +49,8 @@ type Candidate struct {
 type CandidatePage struct {
 	Items    []Candidate
 	RawCount int
+	PageNum  int64
+	PageSize int64
 }
 
 type MarketItem struct {
@@ -118,7 +121,14 @@ func (client *SMISClient) FetchCandidatePage(ctx context.Context, page int) (Can
 			NameCN: stringValue(record["cnName"]),
 		})
 	}
-	return CandidatePage{Items: items, RawCount: len(rawItems)}, nil
+	responsePageNum, _ := positiveID(object["pageNum"])
+	responsePageSize, _ := positiveID(object["pageSize"])
+	return CandidatePage{
+		Items:    items,
+		RawCount: len(rawItems),
+		PageNum:  responsePageNum,
+		PageSize: responsePageSize,
+	}, nil
 }
 
 func (client *SMISClient) FetchExchangePage(ctx context.Context, page int) (ExchangePage, error) {
@@ -241,6 +251,9 @@ func (client *SMISClient) request(ctx context.Context, method, path string, body
 			detail += "; Retry-After=" + retryAfter
 		}
 		return nil, fmt.Errorf("%w: %s", ErrAccessRestricted, detail)
+	}
+	if response.StatusCode >= 200 && response.StatusCode < 300 && len(bytes.TrimSpace(responseBody)) == 0 {
+		return nil, fmt.Errorf("%w: HTTP %d with empty response from %s", ErrAccessRestricted, response.StatusCode, path)
 	}
 	if looksLikeChallenge(response.Header.Get("Content-Type"), responseBody) {
 		return nil, fmt.Errorf("%w: challenge-like HTML from %s", ErrAccessRestricted, path)

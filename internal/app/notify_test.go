@@ -281,3 +281,38 @@ func pendingAlerts(t *testing.T, stateStore *store.Store) []store.Alert {
 	}
 	return alerts
 }
+
+func TestSendNoSuitableItemsIfNeeded(t *testing.T) {
+	t.Run("no A-tier candidate sends", func(t *testing.T) {
+		sender := &recordingSender{}
+		sent, err := SendNoSuitableItemsIfNeeded(context.Background(), sender, store.ItemTierCounts{B1: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !sent || len(sender.alerts) != 1 || sender.alerts[0].Message != noSuitableItemsMessage {
+			t.Fatalf("sent=%t alerts=%#v", sent, sender.alerts)
+		}
+	})
+
+	t.Run("A-tier candidate skips", func(t *testing.T) {
+		sent, err := SendNoSuitableItemsIfNeeded(context.Background(), nil, store.ItemTierCounts{A: 1})
+		if err != nil || sent {
+			t.Fatalf("sent=%t err=%v", sent, err)
+		}
+	})
+
+	t.Run("nil sender fails when needed", func(t *testing.T) {
+		if _, err := SendNoSuitableItemsIfNeeded(context.Background(), nil, store.ItemTierCounts{}); err == nil {
+			t.Fatal("nil sender was accepted")
+		}
+	})
+
+	t.Run("send failure is returned", func(t *testing.T) {
+		sendErr := errors.New("sender unavailable")
+		sender := &recordingSender{err: sendErr}
+		sent, err := SendNoSuitableItemsIfNeeded(context.Background(), sender, store.ItemTierCounts{C: 2})
+		if sent || !errors.Is(err, sendErr) {
+			t.Fatalf("sent=%t err=%v", sent, err)
+		}
+	})
+}

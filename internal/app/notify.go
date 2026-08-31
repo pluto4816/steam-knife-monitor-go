@@ -19,6 +19,8 @@ type SendResult struct {
 	SentCount    int
 }
 
+const noSuitableItemsMessage = "没有合适物品"
+
 func SendPendingAlerts(
 	ctx context.Context,
 	stateStore *store.Store,
@@ -42,6 +44,23 @@ func SendPendingAlerts(
 		result.SentCount++
 	}
 	return result, nil
+}
+
+func SendNoSuitableItemsIfNeeded(
+	ctx context.Context,
+	sender Sender,
+	tierCounts store.ItemTierCounts,
+) (bool, error) {
+	if tierCounts.A > 0 {
+		return false, nil
+	}
+	if sender == nil {
+		return false, fmt.Errorf("sender cannot be nil")
+	}
+	if err := sender.Send(ctx, store.Alert{Message: noSuitableItemsMessage}); err != nil {
+		return false, fmt.Errorf("send no-suitable-items notification: %w", err)
+	}
+	return true, nil
 }
 
 func newAlertDraft(

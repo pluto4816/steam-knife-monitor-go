@@ -94,7 +94,8 @@ func TestFetchCandidatePageRequestAndResponse(t *testing.T) {
 	for _, key := range []string{"typeList", "weaponList", "heroList", "slotList"} {
 		assertStringList(t, body[key], []string{})
 	}
-	if page.RawCount != 1 || len(page.Items) != 1 || page.Items[0].ItemID != 53 || page.Items[0].NameCN != "AK-47 | 精英之作 (久经沙场)" {
+	if page.RawCount != 1 || page.PageNum != 3 || page.PageSize != SMISPageSize ||
+		len(page.Items) != 1 || page.Items[0].ItemID != 53 || page.Items[0].NameCN != "AK-47 | 精英之作 (久经沙场)" {
 		t.Fatalf("unexpected candidate page: %#v", page)
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pluto4816/steam-knife-monitor-go/internal/catalog"
 	"github.com/pluto4816/steam-knife-monitor-go/internal/collector"
 	"github.com/pluto4816/steam-knife-monitor-go/internal/core"
 	"github.com/pluto4816/steam-knife-monitor-go/internal/store"
@@ -94,6 +95,68 @@ func TestRunDueChecksProcessesDueItemsInStoreOrder(t *testing.T) {
 	}
 	if !equalInt64s(*requests, []int64{2, 1, 3}) {
 		t.Fatalf("request order = %#v, want [2 1 3]", *requests)
+	}
+}
+
+func TestRunConfiguredDueChecksFiltersItemsOutsideCatalog(t *testing.T) {
+	stateStore := openTestStore(t)
+	now := time.Now().UTC()
+	configured := dueState(1, now.Add(-time.Minute))
+	stale := dueState(99, now.Add(-2*time.Minute))
+	saveState(t, stateStore, configured)
+	saveState(t, stateStore, stale)
+
+	client, requests := dueTestClient(t, func(itemID int64) (int, string) {
+		return http.StatusOK, detailData(itemID, "0.59", 400, "2026-08-19 16:06:44")
+	})
+	config := RunConfig{
+		RequestDelay: 0,
+		Candidates: []catalog.Item{
+			{ItemID: 1, MarketHashName: "hash-1", NameCN: "一"},
+		},
+	}
+	result, err := runConfiguredDueChecks(context.Background(), client, stateStore, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != (DueCheckResult{DueCount: 1, ProcessedCount: 1}) {
+		t.Fatalf("result = %#v", result)
+	}
+	if !equalInt64s(*requests, []int64{1}) {
+		t.Fatalf("requests = %#v, want only catalog item 1", *requests)
+	}
+	got, found, err := stateStore.GetItemState(context.Background(), 99)
+	if err != nil || !found || got != stale {
+		t.Fatalf("stale item changed: got=%#v found=%t err=%v", got, found, err)
+	}
+}
+
+func TestRunConfiguredDueChecksRejectsCatalogHashMismatch(t *testing.T) {
+	stateStore := openTestStore(t)
+	old := dueState(1, time.Now().UTC().Add(-time.Minute))
+	saveState(t, stateStore, old)
+
+	client, requests := dueTestClient(t, func(itemID int64) (int, string) {
+		return http.StatusOK, detailData(itemID, "0.59", 400, "2026-08-19 16:06:44")
+	})
+	config := RunConfig{
+		Candidates: []catalog.Item{
+			{ItemID: 1, MarketHashName: "different-hash", NameCN: "一"},
+		},
+	}
+	result, err := runConfiguredDueChecks(context.Background(), client, stateStore, config)
+	if err == nil || !strings.Contains(err.Error(), "does not match catalog") {
+		t.Fatalf("error = %v, want catalog hash mismatch", err)
+	}
+	if result != (DueCheckResult{DueCount: 1}) {
+		t.Fatalf("result = %#v", result)
+	}
+	if !equalInt64s(*requests, []int64{1}) {
+		t.Fatalf("requests = %#v, want [1]", *requests)
+	}
+	got, found, getErr := stateStore.GetItemState(context.Background(), 1)
+	if getErr != nil || !found || got != old {
+		t.Fatalf("old state changed: got=%#v found=%t err=%v", got, found, getErr)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/pluto4816/steam-knife-monitor-go/internal/catalog"
 	"github.com/pluto4816/steam-knife-monitor-go/internal/collector"
 	"github.com/pluto4816/steam-knife-monitor-go/internal/store"
 )
@@ -17,6 +18,10 @@ type RunConfig struct {
 	PageDelay        time.Duration
 	RequestDelay     time.Duration
 	ErrorDelay       time.Duration
+
+	// Candidates is nil only for the frozen V1 scan tests. Production modes load
+	// a non-empty persisted catalog and therefore always use targeted details.
+	Candidates []catalog.Item
 }
 
 func Run(
@@ -38,7 +43,7 @@ func Run(
 		}
 
 		if nextFullScanAttempt.IsZero() || !time.Now().UTC().Before(nextFullScanAttempt) {
-			result, err := RunScanCycle(ctx, client, stateStore, config.PageDelay)
+			result, err := runConfiguredScan(ctx, client, stateStore, config)
 			completedAt := time.Now().UTC()
 			if err != nil {
 				if ctx.Err() != nil {
@@ -72,7 +77,7 @@ func Run(
 			}
 		}
 
-		result, dueErr := RunDueChecks(ctx, client, stateStore, config.RequestDelay)
+		result, dueErr := runConfiguredDueChecks(ctx, client, stateStore, config)
 		nextLoopDelay := config.DuePollInterval
 		if dueErr != nil {
 			if ctx.Err() != nil {
@@ -129,6 +134,18 @@ func Run(
 	}
 }
 
+func runConfiguredScan(
+	ctx context.Context,
+	client *collector.SMISClient,
+	stateStore *store.Store,
+	config RunConfig,
+) (ScanResult, error) {
+	if config.Candidates != nil {
+		return RunTargetedScanCycle(ctx, client, stateStore, config.Candidates, config.RequestDelay)
+	}
+	return RunScanCycle(ctx, client, stateStore, config.PageDelay)
+}
+
 func validateRunConfig(config RunConfig) error {
 	if config.FullScanInterval <= 0 {
 		return fmt.Errorf("full scan interval must be positive")
@@ -144,6 +161,9 @@ func validateRunConfig(config RunConfig) error {
 	}
 	if config.RequestDelay < 0 {
 		return fmt.Errorf("request delay cannot be negative")
+	}
+	if config.Candidates != nil && len(config.Candidates) == 0 {
+		return fmt.Errorf("candidate catalog cannot be empty")
 	}
 	return nil
 }
