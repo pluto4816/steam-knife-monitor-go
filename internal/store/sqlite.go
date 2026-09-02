@@ -48,6 +48,13 @@ CREATE TABLE IF NOT EXISTS alerts (
         OR
         (kind = 'A_IMPROVEMENT' AND a_entry_alert_id IS NOT NULL)
     )
+);
+
+CREATE TABLE IF NOT EXISTS targeted_scan_checkpoint (
+    singleton           INTEGER PRIMARY KEY CHECK (singleton = 1),
+    catalog_fingerprint TEXT NOT NULL CHECK (length(catalog_fingerprint) = 64),
+    completed_count     INTEGER NOT NULL CHECK (completed_count > 0),
+    last_item_id        INTEGER NOT NULL CHECK (last_item_id > 0)
 );`
 
 const itemStateUpsert = `

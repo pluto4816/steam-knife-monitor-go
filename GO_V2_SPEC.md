@@ -100,33 +100,45 @@ normal read requests to smis.club.
 Replace the expensive global exchange crawl with a manually refreshed candidate catalog and
 targeted smis.club detail reads.
 
-Do not overdesign this as a dynamic plugin system. The Steam collector is an isolated built-in
-execution mode in the existing executable. It runs only when explicitly selected and shares
-data with the normal modes through one versioned JSON catalog.
+Do not overdesign this as a dynamic plugin system. The candidate-source collector is an isolated
+built-in execution mode in the existing executable. It runs only when explicitly selected and
+shares data with the normal modes through one versioned JSON catalog.
 
 ## Manual candidate update
 
 `update-candidates` is a bounded manual mode. It does not open the production SQLite database,
 construct a QQ sender, send QQ messages, or start the monitor. It:
 
-1. reads the Steam Community Market search results for CS2 using the server-side filters
-   `Normal`, `Field-Tested`, and `Mil-Spec Grade`;
+1. downloads the ByMykel CSGO-API English `skins_not_grouped.json` game-definition snapshot and
+   filters exact structured fields for `rarity.id == rarity_rare_weapon`,
+   `wear.name == Field-Tested`, `stattrak == false`, and `souvenir == false`;
 2. reads the already verified smis.club candidate search using the equivalent V1 filters;
-3. maps Steam `market_hash_name` values to smis.club numeric item IDs through the verified
-   single-item detail endpoint;
+3. intersects snapshot `market_hash_name` values with smis.club numeric item IDs through the
+   verified single-item detail endpoint;
 4. reuses still-valid mappings from the previous catalog so later refreshes normally need
    detail requests only for new or changed items; and
 5. atomically replaces the catalog only after every required page and detail response was
    successfully parsed and validated.
 
-Steam and smis.club use different identifiers. A Steam result without a matching smis.club ID
-is reported by `market_hash_name` and omitted because it cannot yet be monitored. It is not a
-reason to invent an ID. An incomplete update never replaces a previously valid catalog.
+The source URL is
+`https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/skins_not_grouped.json`.
+The upstream CSGO-API project is MIT-licensed and generates its structured data from CS2 game
+files. Its `main` snapshot is mutable, so each successful download is bounded to 64 MiB, fully
+decoded and validated, and identified in the completion summary by the SHA-256 of the exact
+response bytes.
 
-The Steam Community Market search endpoint is Steam-hosted but is not part of the documented
-public Steamworks Web API. Treat it as changeable web behavior. Use conservative sequential
-requests, no internal retry, and immediately stop on empty responses, 401, 403, 429, challenge
-HTML, malformed data, or similar restrictions. Do not bypass Steam or smis.club controls.
+The definition snapshot and smis.club use different identifiers. A definition without a
+matching smis.club ID is reported by `market_hash_name` and omitted because it cannot yet be
+monitored. It is not a reason to invent an ID. The snapshot describes items defined by the game;
+it does not prove current Steam Community Market availability. Current ratio, volume, and price
+evidence continues to come only from a successfully validated smis.club single-item detail.
+
+The update performs one snapshot request followed by conservative sequential smis.club requests,
+with no internal retry. It immediately stops on an oversized or empty response, 401, 403, 429,
+challenge HTML, malformed data, inconsistent filter fields, duplicate candidate names, or
+similar restrictions. It never calls Steam Community Market. An incomplete update never
+replaces a previously valid catalog, and neither source absence nor a definition-list change is
+market-state evidence.
 
 ## Candidate catalog
 
@@ -138,8 +150,8 @@ The catalog contains only:
 - sorted smis.club item IDs with `market_hash_name` and Chinese display name.
 
 It contains no credentials. `monitor`, `once`, and `preview` load this catalog at startup and
-fail clearly when it is missing, empty, or invalid. They never run the Steam collector or the
-smis.club candidate search implicitly.
+fail clearly when it is missing, empty, or invalid. They never download the ByMykel snapshot,
+call Steam Community Market, or run the smis.club candidate search implicitly.
 
 ## Targeted market scan
 
@@ -148,26 +160,58 @@ candidate IDs and calls the already verified `/api/commodity/{id}` detail endpoi
 with the existing conservative request delay. Each valid detail supplies the ratio, exact price
 text, and `steamTransactionQuantity` used by the unchanged V1 classifier.
 
+The same validated detail also selects the lowest strictly positive sell price among BUFF,
+悠悠有品, C5, IGXE, and ECO for alert display. Zero prices mean unavailable and are ignored.
+Prices are compared exactly without floating point and the selected JSON number text is preserved.
+Exact ties use that listed platform order. This display selection does not change V1
+classification. New persisted market alerts use:
+
+```text
+名称：{name_cn}
+折扣：{ratio}
+steam成交量：{steamTransactionQuantity}
+steam价格：{steamSellPrice}
+平台：{lowest platform}
+平台价格：{exact lowest platform price}
+```
+
 An absent, invalid, restricted, or incomplete detail response cannot change that item's stored
 state. The bounded run stops on the first error and does not send notifications from an
 incomplete run. HTTP 2xx responses with an empty or whitespace-only body are treated as access
 restriction or equivalent upstream soft failure and stop immediately without an internal retry.
+
+The targeted scan stores one SQLite checkpoint after each successfully validated item has been
+persisted. The checkpoint contains the SHA-256 fingerprint of the exact sorted catalog, the
+completed prefix length, and the last completed item ID. A later invocation with the same
+catalog resumes at the first unfinished item. A different catalog invalidates the checkpoint and
+starts from its first item. Completing the full catalog clears the checkpoint before due checks
+or notification delivery. State persistence precedes checkpoint persistence, so a crash between
+the two may repeat one safe item but can never skip an unpersisted item.
+
+Resumed items count only as a completed prefix; they are not fetched again and are reported
+separately in scan summaries. Even with a checkpoint, no due-check, tier summary, pending-alert
+delivery, or `-notify-empty` completion message may run until the entire catalog has completed.
 
 ## V2.2 compatibility and acceptance criteria
 
 - V1 classification, scheduling, hysteresis, notification, SQLite, and QQ semantics do not
   change.
 - The candidate update mode needs neither SQLite nor QQ credentials.
-- The normal modes make no Steam requests and no exchange requests.
+- The normal modes make no ByMykel, Steam Community Market, or exchange requests.
 - Preview continues to use fresh in-memory SQLite while reading the same external candidate
   catalog as the production modes.
 - Candidate replacement is atomic and a failed update preserves the prior catalog.
+- Interrupted targeted scans resume from a checkpoint only for the exact same catalog; catalog
+  changes reset progress, successful completion clears it, and incomplete scans send nothing.
+- Alert messages report the lowest positive BUFF, 悠悠有品, C5, IGXE, or ECO sell price using
+  exact comparison and the source price text.
 - Repeated candidate updates reuse valid mappings and fetch details only where mapping is
-  missing or no longer matches the Steam result set.
-- Successful candidate updates report every omitted Steam-only `market_hash_name`.
+  missing or no longer matches the definition snapshot.
+- Successful candidate updates report the definition snapshot SHA-256 and every omitted
+  definition-only `market_hash_name`.
 - `-notify-empty` is accepted only by `once` and sends only after a complete successful run
   whose current catalog has no tier-A item.
-- Steam and smis.club access restrictions stop the active bounded operation immediately.
+- ByMykel/GitHub and smis.club access restrictions stop the active bounded operation immediately.
 - `gofmt`, `go test ./...`, and `go vet ./...` pass.
 
 ## Deferred V2 phases

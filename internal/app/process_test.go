@@ -215,7 +215,9 @@ func marketItem(itemID int64, ratio core.RatioBP, volume int) collector.MarketIt
 			Ratio:            ratio,
 			SteamDailyVolume: volume,
 		},
-		SteamPrice: "17.73",
+		SteamPrice:          "17.73",
+		LowestPlatform:      "BUFF",
+		LowestPlatformPrice: "9.87",
 	}
 }
 

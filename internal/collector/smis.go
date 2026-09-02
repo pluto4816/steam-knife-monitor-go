@@ -54,12 +54,14 @@ type CandidatePage struct {
 }
 
 type MarketItem struct {
-	ItemID         int64
-	MarketHashName string
-	NameCN         string
-	MarketData     core.MarketData
-	SteamPrice     string
-	UpdatedAt      string
+	ItemID              int64
+	MarketHashName      string
+	NameCN              string
+	MarketData          core.MarketData
+	SteamPrice          string
+	LowestPlatform      string
+	LowestPlatformPrice string
+	UpdatedAt           string
 }
 
 type ExchangePage struct {
@@ -355,19 +357,34 @@ func parseDetailMarketItem(record map[string]any) (MarketItem, error) {
 		return MarketItem{}, fmt.Errorf("invalid steamTransactionQuantity %q", volumeNumber.String())
 	}
 
-	priceFields := []string{
-		"steamSellPrice", "buffSellPrice", "uuypSellPrice",
-		"c5SellPrice", "igxeSellPrice", "ecoSellPrice",
+	priceFields := []struct {
+		field    string
+		platform string
+	}{
+		{field: "steamSellPrice"},
+		{field: "buffSellPrice", platform: "BUFF"},
+		{field: "uuypSellPrice", platform: "悠悠有品"},
+		{field: "c5SellPrice", platform: "C5"},
+		{field: "igxeSellPrice", platform: "IGXE"},
+		{field: "ecoSellPrice", platform: "ECO"},
 	}
 	prices := make([]*big.Rat, 0, len(priceFields))
 	steamPrice := ""
-	for _, field := range priceFields {
-		price, raw, err := parseDetailPrice(record[field], field)
+	var lowestPlatformPriceValue *big.Rat
+	lowestPlatform := ""
+	lowestPlatformPrice := ""
+	for _, priceField := range priceFields {
+		price, raw, err := parseDetailPrice(record[priceField.field], priceField.field)
 		if err != nil {
 			return MarketItem{}, err
 		}
-		if field == "steamSellPrice" {
+		if priceField.field == "steamSellPrice" {
 			steamPrice = raw
+		} else if price.Sign() > 0 &&
+			(lowestPlatformPriceValue == nil || price.Cmp(lowestPlatformPriceValue) < 0) {
+			lowestPlatformPriceValue = price
+			lowestPlatform = priceField.platform
+			lowestPlatformPrice = raw
 		}
 		prices = append(prices, price)
 	}
@@ -384,8 +401,10 @@ func parseDetailMarketItem(record map[string]any) (MarketItem, error) {
 			Ratio:            ratio,
 			SteamDailyVolume: int(volume),
 		},
-		SteamPrice: steamPrice,
-		UpdatedAt:  stringValue(record["updateTime"]),
+		SteamPrice:          steamPrice,
+		LowestPlatform:      lowestPlatform,
+		LowestPlatformPrice: lowestPlatformPrice,
+		UpdatedAt:           stringValue(record["updateTime"]),
 	}, nil
 }
 
@@ -425,9 +444,6 @@ func detailRatioBP(prices []*big.Rat) (core.RatioBP, error) {
 	quotient, remainder := new(big.Int), new(big.Int)
 	quotient.QuoRem(scaled.Num(), scaled.Denom(), remainder)
 	comparison := new(big.Int).Mul(remainder, big.NewInt(2)).Cmp(scaled.Denom())
-	if comparison == 0 {
-		return 0, fmt.Errorf("exact RatioBP rounding tie is not verified")
-	}
 	if comparison > 0 {
 		quotient.Add(quotient, big.NewInt(1))
 	}

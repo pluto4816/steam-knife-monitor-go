@@ -115,35 +115,47 @@ func TestFetchCandidatePageEmptyItems(t *testing.T) {
 
 func TestFetchMarketItemVerifiedRatios(t *testing.T) {
 	tests := []struct {
-		name       string
-		itemID     int64
-		steamPrice string
-		buffPrice  string
-		uuypPrice  string
-		c5Price    string
-		igxePrice  string
-		ecoPrice   string
-		wantRatio  core.RatioBP
+		name              string
+		itemID            int64
+		steamPrice        string
+		buffPrice         string
+		uuypPrice         string
+		c5Price           string
+		igxePrice         string
+		ecoPrice          string
+		wantRatio         core.RatioBP
+		wantPlatform      string
+		wantPlatformPrice string
 	}{
 		{
 			name: "72825", itemID: 72825, steamPrice: "1157.77",
 			buffPrice: "22.9", uuypPrice: "0", c5Price: "0",
 			igxePrice: "0", ecoPrice: "0", wantRatio: 227,
+			wantPlatform: "BUFF", wantPlatformPrice: "22.9",
 		},
 		{
 			name: "76026", itemID: 76026, steamPrice: "12600.0",
-			buffPrice: "9.87", uuypPrice: "8.98", c5Price: "10.0",
+			buffPrice: "9.87", uuypPrice: "8.9800", c5Price: "10.0",
 			igxePrice: "0", ecoPrice: "0", wantRatio: 8,
+			wantPlatform: "悠悠有品", wantPlatformPrice: "8.9800",
 		},
 		{
 			name: "72299", itemID: 72299, steamPrice: "5433.32",
 			buffPrice: "148.0", uuypPrice: "200.0", c5Price: "100.78",
 			igxePrice: "0", ecoPrice: "0", wantRatio: 213,
+			wantPlatform: "C5", wantPlatformPrice: "100.78",
 		},
 		{
 			name: "rounds_not_truncates_68632", itemID: 68632, steamPrice: "346.55",
 			buffPrice: "3.52", uuypPrice: "2.78", c5Price: "3.1",
 			igxePrice: "0", ecoPrice: "2.38", wantRatio: 79,
+			wantPlatform: "ECO", wantPlatformPrice: "2.38",
+		},
+		{
+			name: "igxe_exact_price", itemID: 53, steamPrice: "11.50",
+			buffPrice: "6.0", uuypPrice: "5.5", c5Price: "5.2",
+			igxePrice: "4.7500", ecoPrice: "5.1", wantRatio: 4750,
+			wantPlatform: "IGXE", wantPlatformPrice: "4.7500",
 		},
 	}
 
@@ -200,6 +212,14 @@ func TestFetchMarketItemVerifiedRatios(t *testing.T) {
 			if item.SteamPrice != testCase.steamPrice {
 				t.Fatalf("SteamPrice = %q, want exact JSON text %q", item.SteamPrice, testCase.steamPrice)
 			}
+			if item.LowestPlatform != testCase.wantPlatform ||
+				item.LowestPlatformPrice != testCase.wantPlatformPrice {
+				t.Fatalf(
+					"lowest platform = %q price=%q, want %q price=%q",
+					item.LowestPlatform, item.LowestPlatformPrice,
+					testCase.wantPlatform, testCase.wantPlatformPrice,
+				)
+			}
 			if item.UpdatedAt != "2026-08-19 12:00:00" {
 				t.Fatalf("UpdatedAt = %q", item.UpdatedAt)
 			}
@@ -207,16 +227,39 @@ func TestFetchMarketItemVerifiedRatios(t *testing.T) {
 	}
 }
 
-func TestFetchMarketItemRejectsUnverifiedRoundingTie(t *testing.T) {
+func TestFetchMarketItemLowestPlatformTieUsesDisplayOrder(t *testing.T) {
+	client := detailResponseClient(t, `{
+		"id":53,"hashName":"Tie","cnName":"Tie",
+		"steamSellPrice":10.00,"steamTransactionQuantity":350,
+		"buffSellPrice":5.000,"uuypSellPrice":5.00,"c5SellPrice":5.0,
+		"igxeSellPrice":0,"ecoSellPrice":0,"updateTime":"2026-08-19 12:00:00"
+	}`)
+	item, err := client.FetchMarketItem(context.Background(), 53)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.LowestPlatform != "BUFF" || item.LowestPlatformPrice != "5.000" {
+		t.Fatalf(
+			"lowest platform = %q price=%q, want BUFF with exact price 5.000",
+			item.LowestPlatform,
+			item.LowestPlatformPrice,
+		)
+	}
+}
+
+func TestFetchMarketItemRoundsExactRatioBPTieDown(t *testing.T) {
 	client := detailResponseClient(t, `{
 		"id":53,"hashName":"Tie","cnName":"Tie",
 		"steamSellPrice":1.15,"steamTransactionQuantity":1,
-		"buffSellPrice":0.00005,"uuypSellPrice":0,"c5SellPrice":0,
+		"buffSellPrice":0.12345,"uuypSellPrice":0,"c5SellPrice":0,
 		"igxeSellPrice":0,"ecoSellPrice":0,"updateTime":"2026-08-19 12:00:00"
 	}`)
-	_, err := client.FetchMarketItem(context.Background(), 53)
-	if err == nil || !strings.Contains(err.Error(), "rounding tie") {
-		t.Fatalf("error = %v, want explicit rounding tie error", err)
+	item, err := client.FetchMarketItem(context.Background(), 53)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.MarketData.Ratio != core.RatioBP(1234) {
+		t.Fatalf("RatioBP = %d, want exact tie rounded down to 1234", item.MarketData.Ratio)
 	}
 }
 

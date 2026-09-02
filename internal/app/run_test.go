@@ -13,8 +13,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pluto4816/steam-knife-monitor-go/internal/catalog"
 	"github.com/pluto4816/steam-knife-monitor-go/internal/collector"
+	"github.com/pluto4816/steam-knife-monitor-go/internal/store"
 )
+
+type callbackSender func(context.Context, store.Alert) error
+
+func (sender callbackSender) Send(ctx context.Context, alert store.Alert) error {
+	return sender(ctx, alert)
+}
 
 func TestRunRejectsInvalidConfig(t *testing.T) {
 	valid := runtimeTestConfig()
@@ -168,6 +176,80 @@ func TestRunFullScanFailureUsesErrorDelay(t *testing.T) {
 	count := requests.countPath("/api/commodity/search")
 	if count < 2 || count > 4 {
 		t.Fatalf("full scan requests = %d, want 2..4 with error delay", count)
+	}
+}
+
+func TestRunIncompleteTargetedScanBlocksDueChecksAndNotificationsUntilResumeCompletes(t *testing.T) {
+	stateStore := openTestStore(t)
+	saveState(t, stateStore, dueState(3, time.Now().UTC().Add(-time.Minute)))
+
+	itemTwoAttempts := 0
+	client, requests := runtimeTestClient(t, func(_ string, path string, _ int) (int, string) {
+		switch path {
+		case "/api/commodity/1":
+			return http.StatusOK, detailData(1, "0.59", 400, "2026-09-02 01:00:00")
+		case "/api/commodity/2":
+			itemTwoAttempts++
+			if itemTwoAttempts == 1 {
+				return http.StatusInternalServerError, `{}`
+			}
+			return http.StatusOK, detailData(2, "0.65", 300, "2026-09-02 01:00:01")
+		case "/api/commodity/3":
+			return http.StatusOK, detailData(3, "0.70", 300, "2026-09-02 01:00:02")
+		default:
+			return http.StatusInternalServerError, `{}`
+		}
+	})
+	config := runtimeTestConfig()
+	config.Candidates = []catalog.Item{
+		{ItemID: 1, MarketHashName: "hash-1", NameCN: "一"},
+		{ItemID: 2, MarketHashName: "hash-2", NameCN: "二"},
+		{ItemID: 3, MarketHashName: "hash-3", NameCN: "三"},
+	}
+	config.ErrorDelay = 25 * time.Millisecond
+	config.DuePollInterval = 5 * time.Millisecond
+
+	sendCount := 0
+	sentBeforeCompleteScan := false
+	sender := callbackSender(func(_ context.Context, _ store.Alert) error {
+		sendCount++
+		if requests.countPath("/api/commodity/2") < 2 || requests.countPath("/api/commodity/3") < 1 {
+			sentBeforeCompleteScan = true
+		}
+		return nil
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+
+	if err := Run(ctx, client, stateStore, config, sender); err != nil {
+		t.Fatal(err)
+	}
+	if sentBeforeCompleteScan {
+		t.Fatal("notification was sent before the resumed targeted scan completed")
+	}
+	if sendCount != 1 {
+		t.Fatalf("notification sends = %d, want 1 after the complete scan", sendCount)
+	}
+	gotRequests := requests.snapshot()
+	wantPaths := []string{
+		"/api/commodity/1",
+		"/api/commodity/2",
+		"/api/commodity/2",
+		"/api/commodity/3",
+	}
+	if len(gotRequests) != len(wantPaths) {
+		t.Fatalf("requests = %#v, want exactly %v", gotRequests, wantPaths)
+	}
+	for index, want := range wantPaths {
+		if gotRequests[index].Path != want {
+			t.Fatalf("request %d path = %q, want %q", index, gotRequests[index].Path, want)
+		}
+	}
+	if retryGap := gotRequests[2].At.Sub(gotRequests[1].At); retryGap < 20*time.Millisecond {
+		t.Fatalf("targeted scan retry gap = %s, want approximately ErrorDelay", retryGap)
+	}
+	if _, found, err := stateStore.GetTargetedScanCheckpoint(context.Background()); err != nil || found {
+		t.Fatalf("completed targeted scan checkpoint found=%t err=%v", found, err)
 	}
 }
 

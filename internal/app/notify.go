@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/pluto4816/steam-knife-monitor-go/internal/collector"
@@ -74,25 +75,25 @@ func newAlertDraft(
 		Kind:          kind,
 		AEntryAlertID: aEntryAlertID,
 		Ratio:         item.MarketData.Ratio,
-		Message:       alertMessage(kind, item),
+		Message:       alertMessage(item),
 		CreatedAt:     createdAt,
 	}
 }
 
-func alertMessage(kind core.AlertKind, item collector.MarketItem) string {
+func alertMessage(item collector.MarketItem) string {
 	return fmt.Sprintf(
-		"Alert: %s\nNameCN: %s\nMarketHashName: %s\nRatio: %s (%d RatioBP)\nSteamDailyVolume: %d\nSteamPrice: %s",
-		kind,
+		"名称：%s\n折扣：%s\nsteam成交量：%d\nsteam价格：%s\n平台：%s\n平台价格：%s",
 		item.NameCN,
-		item.MarketHashName,
 		formatRatio(item.MarketData.Ratio),
-		item.MarketData.Ratio,
 		item.MarketData.SteamDailyVolume,
 		item.SteamPrice,
+		item.LowestPlatform,
+		item.LowestPlatformPrice,
 	)
 }
 
 func formatRatio(ratio core.RatioBP) string {
 	value := int64(ratio)
-	return fmt.Sprintf("%d.%04d", value/10000, value%10000)
+	formatted := fmt.Sprintf("%d.%04d", value/10000, value%10000)
+	return strings.TrimRight(strings.TrimRight(formatted, "0"), ".")
 }

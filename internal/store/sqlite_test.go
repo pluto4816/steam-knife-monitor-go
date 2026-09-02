@@ -32,6 +32,14 @@ func TestOpenInitializesSchemaAndCanReopen(t *testing.T) {
 	if tableName != "alerts" {
 		t.Fatalf("table = %q, want alerts", tableName)
 	}
+	if err := store.db.QueryRow(
+		"SELECT name FROM sqlite_master WHERE type='table' AND name='targeted_scan_checkpoint'",
+	).Scan(&tableName); err != nil {
+		t.Fatalf("targeted_scan_checkpoint table was not created: %v", err)
+	}
+	if tableName != "targeted_scan_checkpoint" {
+		t.Fatalf("table = %q, want targeted_scan_checkpoint", tableName)
+	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}

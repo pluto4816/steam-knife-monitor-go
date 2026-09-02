@@ -19,11 +19,12 @@ import (
 )
 
 const (
-	smisBaseURL        = "https://smis.club"
-	steamBaseURL       = "https://steamcommunity.com"
-	defaultDBPath      = "./steam-knife-monitor.db"
-	defaultCatalogPath = "./steam-candidates.json"
-	httpTimeout        = 30 * time.Second
+	smisBaseURL              = "https://smis.club"
+	byMykelDefinitionsURL    = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/skins_not_grouped.json"
+	defaultDBPath            = "./steam-knife-monitor.db"
+	defaultCatalogPath       = "./steam-candidates.json"
+	httpTimeout              = 30 * time.Second
+	candidateSnapshotTimeout = 2 * time.Minute
 
 	modeMonitor          executionMode = "monitor"
 	modeOnce             executionMode = "once"
@@ -68,9 +69,13 @@ func run() error {
 	smisClient := collector.NewSMISClient(smisBaseURL, httpClient)
 	if config.Mode == modeUpdateCandidates {
 		log.Printf("candidate update started: catalog=%s", config.CandidatePath)
+		definitionsClient := collector.NewCS2DefinitionsClient(
+			byMykelDefinitionsURL,
+			&http.Client{Timeout: candidateSnapshotTimeout},
+		)
 		result, err := app.RunCandidateUpdate(
 			ctx,
-			collector.NewSteamClient(steamBaseURL, httpClient),
+			definitionsClient,
 			smisClient,
 			config.CandidatePath,
 			defaultRunConfig.PageDelay,
@@ -214,25 +219,28 @@ func senderForMode(mode executionMode, httpClient *http.Client) (app.Sender, err
 
 func logCandidateUpdateSummary(result app.CandidateUpdateResult) {
 	log.Printf(
-		"candidate update summary: steam=%d smis=%d matched=%d reused=%d details_fetched=%d steam_only=%d smis_only=%d",
-		result.SteamCount,
+		"candidate update summary: definition_records=%d definition_candidates=%d definition_sha256=%s smis=%d matched=%d reused=%d details_fetched=%d definition_only=%d smis_only=%d",
+		result.DefinitionRecordCount,
+		result.DefinitionCandidateCount,
+		result.DefinitionSnapshotSHA256,
 		result.SMISCandidateCount,
 		result.MatchedCount,
 		result.ReusedCount,
 		result.DetailFetchedCount,
-		result.SteamOnlyCount,
+		result.DefinitionOnlyCount,
 		result.SMISOnlyCount,
 	)
-	for _, name := range result.SteamOnlyNames {
-		log.Printf("candidate update omitted Steam-only item: market_hash_name=%q", name)
+	for _, name := range result.DefinitionOnlyNames {
+		log.Printf("candidate update omitted definition-only item: market_hash_name=%q", name)
 	}
 }
 
 func logOneShotSummary(label string, result app.OneShotResult) {
 	log.Printf(
-		"%s summary: candidates=%d matched=%d processed=%d duplicates=%d due=%d due_processed=%d tiers=A:%d,B1:%d,B2:%d,B3:%d,C:%d notifications_pending=%d notifications_sent=%d",
+		"%s summary: candidates=%d resumed=%d matched=%d processed=%d duplicates=%d due=%d due_processed=%d tiers=A:%d,B1:%d,B2:%d,B3:%d,C:%d notifications_pending=%d notifications_sent=%d",
 		label,
 		result.Scan.CandidateCount,
+		result.Scan.ResumedCount,
 		result.Scan.MatchedCount,
 		result.Scan.ProcessedCount,
 		result.Scan.DuplicateCount,

@@ -53,18 +53,26 @@ func Run(
 					return fmt.Errorf("full scan access restricted: %w", err)
 				}
 				log.Printf(
-					"full scan error: candidates=%d matched=%d processed=%d duplicates=%d: %v",
+					"full scan error: candidates=%d resumed=%d matched=%d processed=%d duplicates=%d: %v",
 					result.CandidateCount,
+					result.ResumedCount,
 					result.MatchedCount,
 					result.ProcessedCount,
 					result.DuplicateCount,
 					err,
 				)
 				nextFullScanAttempt = completedAt.Add(config.ErrorDelay)
+				if config.Candidates != nil {
+					if err := waitContext(ctx, config.ErrorDelay); err != nil {
+						return nil
+					}
+					continue
+				}
 			} else {
 				log.Printf(
-					"full scan complete: candidates=%d matched=%d processed=%d duplicates=%d",
+					"full scan complete: candidates=%d resumed=%d matched=%d processed=%d duplicates=%d",
 					result.CandidateCount,
+					result.ResumedCount,
 					result.MatchedCount,
 					result.ProcessedCount,
 					result.DuplicateCount,

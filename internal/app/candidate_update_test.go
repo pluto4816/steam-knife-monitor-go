@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -30,9 +32,9 @@ func TestRunCandidateUpdateReusesMappingsAndWritesCompleteCatalog(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	steamClient := candidateUpdateSteamClient(t, []string{
+	definitionsClient, snapshotSHA256 := candidateUpdateDefinitionsClient(t, []string{
 		"AK-47 | One (Field-Tested)",
-		"AWP | Steam Only (Field-Tested)",
+		"AWP | Definition Only (Field-Tested)",
 		"P250 | Two (Field-Tested)",
 	})
 	smisClient, requests := runtimeTestClient(t, func(_ string, path string, page int) (int, string) {
@@ -50,14 +52,16 @@ func TestRunCandidateUpdateReusesMappingsAndWritesCompleteCatalog(t *testing.T) 
 		}
 	})
 
-	result, err := RunCandidateUpdate(context.Background(), steamClient, smisClient, path, 0, 0)
+	result, err := RunCandidateUpdate(context.Background(), definitionsClient, smisClient, path, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := (CandidateUpdateResult{
-		SteamCount: 3, SMISCandidateCount: 3, MatchedCount: 2,
-		ReusedCount: 1, DetailFetchedCount: 2, SteamOnlyCount: 1,
-		SteamOnlyNames: []string{"AWP | Steam Only (Field-Tested)"}, SMISOnlyCount: 1,
+		DefinitionRecordCount: 3, DefinitionCandidateCount: 3,
+		DefinitionSnapshotSHA256: snapshotSHA256,
+		SMISCandidateCount:       3, MatchedCount: 2, ReusedCount: 1,
+		DetailFetchedCount: 2, DefinitionOnlyCount: 1,
+		DefinitionOnlyNames: []string{"AWP | Definition Only (Field-Tested)"}, SMISOnlyCount: 1,
 	})
 	if !reflect.DeepEqual(result, want) {
 		t.Fatalf("result = %#v, want %#v", result, want)
@@ -87,7 +91,7 @@ func TestRunCandidateUpdateFailurePreservesPreviousCatalog(t *testing.T) {
 	if err := catalog.SaveAtomic(path, previous); err != nil {
 		t.Fatal(err)
 	}
-	steamClient := candidateUpdateSteamClient(t, []string{"P250 | New (Field-Tested)"})
+	definitionsClient, _ := candidateUpdateDefinitionsClient(t, []string{"P250 | New (Field-Tested)"})
 	smisClient, _ := runtimeTestClient(t, func(_ string, path string, page int) (int, string) {
 		switch {
 		case path == "/api/commodity/search" && page == 1:
@@ -98,7 +102,7 @@ func TestRunCandidateUpdateFailurePreservesPreviousCatalog(t *testing.T) {
 			return http.StatusInternalServerError, `{}`
 		}
 	})
-	if _, err := RunCandidateUpdate(context.Background(), steamClient, smisClient, path, 0, 0); err == nil {
+	if _, err := RunCandidateUpdate(context.Background(), definitionsClient, smisClient, path, 0, 0); err == nil {
 		t.Fatal("failed identity update returned nil error")
 	}
 	got, err := catalog.Load(path)
@@ -173,28 +177,32 @@ func TestFetchAllSMISCandidatesRejectsUnexpectedPagination(t *testing.T) {
 	}
 }
 
-func candidateUpdateSteamClient(t *testing.T, names []string) *collector.SteamClient {
+func candidateUpdateDefinitionsClient(t *testing.T, names []string) (*collector.CS2DefinitionsClient, string) {
 	t.Helper()
+	var body strings.Builder
+	body.WriteByte('[')
+	for index, name := range names {
+		if index > 0 {
+			body.WriteByte(',')
+		}
+		_, _ = fmt.Fprintf(
+			&body,
+			`{"market_hash_name":%q,"rarity":{"id":"rarity_rare_weapon","name":"Mil-Spec Grade"},"wear":{"id":"SFUI_InvTooltip_Wear_Amount_2","name":"Field-Tested"},"stattrak":false,"souvenir":false}`,
+			name,
+		)
+	}
+	body.WriteByte(']')
+	responseBody := body.String()
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		start := request.URL.Query().Get("start")
-		if start != "0" {
-			t.Errorf("unexpected Steam start %s", start)
+		if request.Method != http.MethodGet {
+			t.Errorf("unexpected definitions method %s", request.Method)
 		}
 		response.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprintf(response, `{"success":true,"start":0,"pagesize":%d,"total_count":%d,"results":[`, len(names), len(names))
-		for index, name := range names {
-			if index > 0 {
-				_, _ = fmt.Fprint(response, ",")
-			}
-			_, _ = fmt.Fprintf(response,
-				`{"hash_name":%q,"asset_description":{"appid":730,"type":"Mil-Spec Grade Rifle","market_hash_name":%q}}`,
-				name, name,
-			)
-		}
-		_, _ = fmt.Fprint(response, `]}`)
+		_, _ = fmt.Fprint(response, responseBody)
 	}))
 	t.Cleanup(server.Close)
-	return collector.NewSteamClient(server.URL, server.Client())
+	digest := sha256.Sum256([]byte(responseBody))
+	return collector.NewCS2DefinitionsClient(server.URL, server.Client()), hex.EncodeToString(digest[:])
 }
 
 func identityJSON(itemID int64, hashName, nameCN string) string {

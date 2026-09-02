@@ -13,30 +13,30 @@ import (
 	"github.com/pluto4816/steam-knife-monitor-go/internal/collector"
 )
 
-const steamCandidatePageSize = 100
-
 type CandidateUpdateResult struct {
-	SteamCount         int
-	SMISCandidateCount int
-	MatchedCount       int
-	ReusedCount        int
-	DetailFetchedCount int
-	SteamOnlyCount     int
-	SteamOnlyNames     []string
-	SMISOnlyCount      int
+	DefinitionRecordCount    int
+	DefinitionCandidateCount int
+	DefinitionSnapshotSHA256 string
+	SMISCandidateCount       int
+	MatchedCount             int
+	ReusedCount              int
+	DetailFetchedCount       int
+	DefinitionOnlyCount      int
+	DefinitionOnlyNames      []string
+	SMISOnlyCount            int
 }
 
 func RunCandidateUpdate(
 	ctx context.Context,
-	steamClient *collector.SteamClient,
+	definitionsClient *collector.CS2DefinitionsClient,
 	smisClient *collector.SMISClient,
 	catalogPath string,
 	pageDelay time.Duration,
 	detailDelay time.Duration,
 ) (CandidateUpdateResult, error) {
 	var result CandidateUpdateResult
-	if steamClient == nil {
-		return result, fmt.Errorf("Steam client cannot be nil")
+	if definitionsClient == nil {
+		return result, fmt.Errorf("CS2 definitions client cannot be nil")
 	}
 	if smisClient == nil {
 		return result, fmt.Errorf("smis client cannot be nil")
@@ -58,13 +58,16 @@ func RunCandidateUpdate(
 		return result, fmt.Errorf("load previous candidate catalog: %w", err)
 	}
 
-	steamNames, err := fetchAllSteamCandidateNames(ctx, steamClient, pageDelay)
+	snapshot, err := definitionsClient.FetchCandidateSnapshot(ctx)
 	if err != nil {
-		return result, fmt.Errorf("collect Steam candidates: %w", err)
+		return result, fmt.Errorf("collect CS2 definition candidates: %w", err)
 	}
-	result.SteamCount = len(steamNames)
-	if result.SteamCount == 0 {
-		return result, fmt.Errorf("Steam candidate search returned no candidates")
+	result.DefinitionRecordCount = snapshot.RecordCount
+	result.DefinitionCandidateCount = len(snapshot.Candidates)
+	result.DefinitionSnapshotSHA256 = snapshot.SHA256
+	definitionNames := make(map[string]struct{}, len(snapshot.Candidates))
+	for _, candidate := range snapshot.Candidates {
+		definitionNames[candidate.MarketHashName] = struct{}{}
 	}
 
 	smisCandidates, err := fetchAllSMISCandidates(ctx, smisClient, pageDelay)
@@ -88,7 +91,7 @@ func RunCandidateUpdate(
 	for _, candidate := range smisCandidates {
 		cached, cachedExists := cachedByID[candidate.ItemID]
 		if cachedExists {
-			if _, stillCandidate := steamNames[cached.MarketHashName]; stillCandidate {
+			if _, stillCandidate := definitionNames[cached.MarketHashName]; stillCandidate {
 				nameCN := candidate.NameCN
 				if strings.TrimSpace(nameCN) == "" {
 					nameCN = cached.NameCN
@@ -112,11 +115,11 @@ func RunCandidateUpdate(
 			return result, fmt.Errorf("fetch smis identity item %d: %w", candidate.ItemID, err)
 		}
 		result.DetailFetchedCount++
-		if _, exists := steamNames[identity.MarketHashName]; !exists {
+		if _, exists := definitionNames[identity.MarketHashName]; !exists {
 			continue
 		}
 		if _, exists := matchedNames[identity.MarketHashName]; exists {
-			return result, fmt.Errorf("multiple smis IDs map to Steam candidate %q", identity.MarketHashName)
+			return result, fmt.Errorf("multiple smis IDs map to CS2 definition candidate %q", identity.MarketHashName)
 		}
 		items = append(items, catalog.Item{
 			ItemID:         identity.ItemID,
@@ -130,16 +133,16 @@ func RunCandidateUpdate(
 		return items[left].ItemID < items[right].ItemID
 	})
 	result.MatchedCount = len(items)
-	for steamName := range steamNames {
-		if _, matched := matchedNames[steamName]; !matched {
-			result.SteamOnlyNames = append(result.SteamOnlyNames, steamName)
+	for definitionName := range definitionNames {
+		if _, matched := matchedNames[definitionName]; !matched {
+			result.DefinitionOnlyNames = append(result.DefinitionOnlyNames, definitionName)
 		}
 	}
-	sort.Strings(result.SteamOnlyNames)
-	result.SteamOnlyCount = len(result.SteamOnlyNames)
+	sort.Strings(result.DefinitionOnlyNames)
+	result.DefinitionOnlyCount = len(result.DefinitionOnlyNames)
 	result.SMISOnlyCount = result.SMISCandidateCount - result.MatchedCount
 	if result.MatchedCount == 0 {
-		return result, fmt.Errorf("Steam and smis candidate sets have no mapped items")
+		return result, fmt.Errorf("CS2 definition and smis candidate sets have no mapped items")
 	}
 
 	updated := catalog.Catalog{
@@ -152,56 +155,6 @@ func RunCandidateUpdate(
 		return result, err
 	}
 	return result, nil
-}
-
-func fetchAllSteamCandidateNames(
-	ctx context.Context,
-	client *collector.SteamClient,
-	requestDelay time.Duration,
-) (map[string]struct{}, error) {
-	names := make(map[string]struct{})
-	start := 0
-	expectedTotal := -1
-	requestMade := false
-	for {
-		if err := waitBeforeRequest(ctx, requestDelay, requestMade); err != nil {
-			return nil, fmt.Errorf("wait before Steam offset %d: %w", start, err)
-		}
-		page, err := client.FetchCandidatePage(ctx, start, steamCandidatePageSize)
-		requestMade = true
-		if err != nil {
-			return nil, fmt.Errorf("fetch Steam offset %d: %w", start, err)
-		}
-		if expectedTotal < 0 {
-			expectedTotal = page.TotalCount
-		} else if page.TotalCount != expectedTotal {
-			return nil, fmt.Errorf("Steam total_count changed from %d to %d during update", expectedTotal, page.TotalCount)
-		}
-		if len(page.Items) == 0 {
-			if start < expectedTotal {
-				return nil, fmt.Errorf("Steam candidate page was empty at offset %d before total_count %d", start, expectedTotal)
-			}
-			break
-		}
-		for _, item := range page.Items {
-			if _, exists := names[item.MarketHashName]; exists {
-				return nil, fmt.Errorf("duplicate Steam market_hash_name %q", item.MarketHashName)
-			}
-			names[item.MarketHashName] = struct{}{}
-		}
-		nextStart := start + len(page.Items)
-		if nextStart >= expectedTotal {
-			break
-		}
-		if len(page.Items) < page.PageSize {
-			return nil, fmt.Errorf("Steam candidate page ended early at offset %d", start)
-		}
-		start = nextStart
-	}
-	if len(names) != expectedTotal {
-		return nil, fmt.Errorf("Steam candidate count is %d, want total_count %d", len(names), expectedTotal)
-	}
-	return names, nil
 }
 
 func fetchAllSMISCandidates(

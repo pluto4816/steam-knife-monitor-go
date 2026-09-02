@@ -24,9 +24,26 @@ func TestProcessMarketItemCreatesEntryAlert(t *testing.T) {
 	if len(pending) != 1 || pending[0].Kind != core.AlertKindAEntry || pending[0].Ratio != 5900 {
 		t.Fatalf("pending entry alerts = %#v", pending)
 	}
-	for _, want := range []string{"A_ENTRY", item.NameCN, item.MarketHashName, "0.5900", "5900 RatioBP", "400", "10.00"} {
-		if !strings.Contains(pending[0].Message, want) {
-			t.Fatalf("message %q does not contain %q", pending[0].Message, want)
+	wantMessage := "名称：AK-47 | 精英之作 (久经沙场)\n折扣：0.59\nsteam成交量：400\nsteam价格：10.00\n平台：BUFF\n平台价格：9.87"
+	if pending[0].Message != wantMessage {
+		t.Fatalf("message = %q, want %q", pending[0].Message, wantMessage)
+	}
+}
+
+func TestFormatRatioForAlert(t *testing.T) {
+	tests := []struct {
+		ratio core.RatioBP
+		want  string
+	}{
+		{ratio: 0, want: "0"},
+		{ratio: 5000, want: "0.5"},
+		{ratio: 5700, want: "0.57"},
+		{ratio: 5901, want: "0.5901"},
+		{ratio: 10000, want: "1"},
+	}
+	for _, testCase := range tests {
+		if got := formatRatio(testCase.ratio); got != testCase.want {
+			t.Errorf("formatRatio(%d) = %q, want %q", testCase.ratio, got, testCase.want)
 		}
 	}
 }
@@ -55,6 +72,8 @@ func TestPendingEntrySuppressesImprovementAndPreservesSnapshot(t *testing.T) {
 	improved := marketItem(53, 5600, 450)
 	improved.NameCN = "更新名称"
 	improved.SteamPrice = "9.00"
+	improved.LowestPlatform = "ECO"
+	improved.LowestPlatformPrice = "8.50"
 	if _, err := ProcessMarketItem(context.Background(), stateStore, improved, testCheckedAt.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +81,9 @@ func TestPendingEntrySuppressesImprovementAndPreservesSnapshot(t *testing.T) {
 	if len(pending) != 1 || pending[0].Kind != core.AlertKindAEntry {
 		t.Fatalf("pending alerts after improvement = %#v", pending)
 	}
-	if pending[0].Message != originalMessage || strings.Contains(pending[0].Message, "9.00") || strings.Contains(pending[0].Message, "5600") {
+	if pending[0].Message != originalMessage ||
+		strings.Contains(pending[0].Message, "9.00") ||
+		strings.Contains(pending[0].Message, "ECO") {
 		t.Fatalf("entry snapshot changed to %q", pending[0].Message)
 	}
 }

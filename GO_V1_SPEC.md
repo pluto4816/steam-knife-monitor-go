@@ -18,7 +18,9 @@ Steam daily volume. Prices are exact strings for storage and display and do not 
 classification. Absence, partial scans, and invalid data are not evidence of a tier change.
 
 Ratios use `RatioBP`, where `1.0000 = 10000`. Business comparisons must not use floating
-point.
+point. When a detail-derived ratio is converted to `RatioBP`, a fractional remainder less than
+or equal to half a `RatioBP` unit rounds down; only a remainder strictly greater than half rounds
+up.
 
 ## Tiers
 

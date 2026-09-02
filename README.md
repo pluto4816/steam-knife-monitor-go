@@ -4,8 +4,8 @@ A small Go Steam/CS2 knife-opportunity monitor for one process, one user, one SQ
 and QQ official bot C2C notifications.
 
 Go V1 is frozen at tag `v1.0.0`. V2.1 added bounded one-time and preview execution. V2.2 adds
-a manually refreshed Steam candidate catalog and replaces the global smis.club exchange crawl
-with targeted detail requests.
+a manually refreshed candidate catalog and replaces the global smis.club exchange crawl with
+targeted detail requests.
 
 ## Candidate catalog
 
@@ -19,32 +19,37 @@ go run ./cmd/monitor \
 
 This bounded command:
 
-- fetches Steam Community Market search results filtered to CS2 `Normal`, `Field-Tested`, and
-  `Mil-Spec Grade` skins;
+- downloads ByMykel CSGO-API's English `skins_not_grouped.json` game-definition snapshot and
+  filters exact structured fields to `Normal`, `Field-Tested`, and `Mil-Spec Grade` skins;
 - fetches the equivalent filtered candidate IDs from smis.club;
-- maps Steam `market_hash_name` values to smis.club numeric item IDs;
+- maps snapshot `market_hash_name` values to smis.club numeric item IDs through verified
+  single-item details;
 - atomically writes `steam-candidates.json` only after the complete update succeeds; and
 - exits without opening SQLite, reading QQ credentials, sending a message, or starting the
   monitor.
 
-Steam and smis.club use different IDs, so the initial update may need one sequential smis detail
-request per candidate to establish mappings. Later updates reuse mappings that still match and
-normally request details only for new or changed items. Requests are sequential and use the
-conservative delays; there is no internal retry or access-control bypass. The completion log
-lists each Steam-only `market_hash_name` that was omitted because no smis.club ID was mapped.
+The snapshot and smis.club use different IDs, so the initial update may need one sequential smis
+detail request per candidate to establish mappings. Later updates reuse mappings that still
+match and normally request details only for new or changed items. The snapshot is fetched once;
+smis requests are sequential and use conservative delays. There is no internal retry or
+access-control bypass. The completion log records the exact snapshot SHA-256 and lists each
+definition-only `market_hash_name` omitted because no smis.club ID was mapped.
 
 The generated JSON contains no credentials. It is local runtime data and is ignored by Git. It
 can be backed up with the SQLite database or regenerated with the command above.
 
-The Steam Community Market search is Steam-hosted web behavior, not a documented public
-Steamworks Web API. A changed response, empty body, 401, 403, 429, or challenge stops the update
-without replacing a valid prior catalog.
+The source is ByMykel's MIT-licensed CSGO-API project:
+`https://github.com/ByMykel/CSGO-API`. Its mutable snapshot is structured data generated from CS2
+game files, not proof that an item is currently listed on Steam Community Market. Live ratio,
+volume, and price evidence still comes only from validated smis.club details. An oversized,
+changed, malformed, empty, 401, 403, 429, or challenge response stops the update without
+replacing a valid prior catalog. The update mode no longer calls Steam Community Market.
 
 ## Execution modes
 
 All normal modes load `./steam-candidates.json` by default. Use `-candidates PATH` to select a
-different catalog. They never run the Steam collector or the smis.club candidate search
-implicitly.
+different catalog. They never download the ByMykel snapshot, call Steam Community Market, or
+run the smis.club candidate search implicitly.
 
 ### Preview
 
@@ -79,6 +84,13 @@ go run ./cmd/monitor \
 This mode has real production side effects: it updates the selected database and may send QQ
 messages. It requires all three QQ environment variables shown below. It does not paginate the
 global smis.club exchange endpoint.
+
+After each successfully validated candidate, the scan saves a SQLite checkpoint tied to the
+SHA-256 fingerprint of the exact ordered catalog. If an upstream restriction interrupts the
+scan, the next invocation with that same catalog resumes at the first unfinished candidate.
+Changing or refreshing the catalog invalidates the old checkpoint and starts from the beginning.
+The checkpoint is cleared after a complete full scan. An incomplete scan still performs no due
+checks and sends no pending or empty-result notification.
 
 To receive an explicit QQ completion message when the successful scan finds no tier-A item in
 the current candidate catalog, add `-notify-empty`:
@@ -117,7 +129,7 @@ go run ./cmd/monitor \
 
 Conservative runtime defaults are a 24-hour full candidate-detail scan, 60-second due poll,
 1-second detail-request delay, and 5-minute ordinary-error delay. These are operating defaults,
-not smis.club or Steam official limits.
+not upstream official limits.
 
 ## QQ credentials
 

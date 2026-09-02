@@ -21,8 +21,8 @@ current implementations or when testing an external side effect clearly requires
 Do not overdesign. Work one phase at a time, implement only the current specification, and do
 not introduce microservices, queues, worker pools, leases, distributed coordination, an ORM, a
 web framework, dependency-injection framework, dynamic plugin system, event bus, or speculative
-abstractions. The V2.2 Steam collector is an isolated built-in manual mode, not a general plugin
-framework.
+abstractions. The V2.2 candidate-source collector is an isolated built-in manual mode, not a
+general plugin framework.
 
 Ratio business logic must use `core.RatioBP`; never compare ratios through `float64`. Prices
 should remain exact strings until the real API representation is confirmed.
@@ -30,20 +30,26 @@ should remain exact strings until the real API representation is confirmed.
 ## Data access
 
 Use only the smis.club endpoints and fields already verified in the frozen Python findings.
-V2.2 may also use only the verified Steam Community Market filtered search fields documented in
-`GO_V2_SPEC.md`. Treat that Steam-hosted search as changeable web behavior, not a documented
-public Steamworks Web API.
+V2.2 may also read only the ByMykel CSGO-API flat English skin-definition snapshot and fields
+documented in `GO_V2_SPEC.md`. Treat that third-party snapshot as mutable input derived from CS2
+game definitions, not as Steam market-state evidence.
 
 Favor low-frequency, sequential, batched, and cached access. Do not bypass access controls,
 CAPTCHA, Cloudflare, rate limits, or other site restrictions. Stop or back off on empty
 responses, 401, 403, 429, challenges, and similar restrictions.
 
-The Steam collector runs only in explicit `update-candidates` mode. Normal modes read the
-persisted catalog, make no Steam requests, and must not paginate the global smis.club exchange
-endpoint. They fetch only verified smis.club single-item details for catalog IDs.
+The ByMykel snapshot collector runs only in explicit `update-candidates` mode. Normal modes read
+the persisted catalog, make no ByMykel or Steam Community Market requests, and must not paginate
+the global smis.club exchange endpoint. They fetch only verified smis.club single-item details
+for catalog IDs.
 
 Absence is not market-state evidence. Only successfully parsed and validated MarketData may
 change a tier. A failed candidate update must preserve the prior valid catalog.
+
+Targeted full scans persist a single-process checkpoint only after an item's validated state is
+saved. A retry may resume only when the checkpoint matches the exact ordered candidate catalog;
+catalog changes invalidate old progress. An incomplete scan must still perform no due-check or
+notification phase.
 
 ## Development phases
 
