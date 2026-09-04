@@ -128,6 +128,8 @@ func TestRunOneShotIncompleteTargetedScanDoesNotSend(t *testing.T) {
 		{ItemID: 1, MarketHashName: "hash-1", NameCN: "一"},
 		{ItemID: 2, MarketHashName: "hash-2", NameCN: "二"},
 	}
+	purchase := &countingPurchaseRunner{}
+	config.Purchase = purchase
 	sender := &recordingSender{}
 
 	result, err := RunOneShot(context.Background(), client, stateStore, config, sender)
@@ -146,6 +148,9 @@ func TestRunOneShotIncompleteTargetedScanDoesNotSend(t *testing.T) {
 	}
 	if requests.total() != 2 {
 		t.Fatalf("requests = %#v, want stop after second detail", requests.snapshot())
+	}
+	if purchase.calls != 0 {
+		t.Fatalf("purchase calls = %d, want none after incomplete scan", purchase.calls)
 	}
 }
 
@@ -195,5 +200,39 @@ func TestRunOneShotCountsOnlyConfiguredCandidates(t *testing.T) {
 	got, found, getErr := stateStore.GetItemState(context.Background(), 99)
 	if getErr != nil || !found || got != stale {
 		t.Fatalf("stale item changed: got=%#v found=%t err=%v", got, found, getErr)
+	}
+}
+
+func TestRunOneShotSendsPurchaseReceiptAndReturnsBeforePendingAlerts(t *testing.T) {
+	stateStore := openTestStore(t)
+	client, _ := runtimeTestClient(t, func(_ string, path string, _ int) (int, string) {
+		if path == "/api/commodity/1" {
+			return http.StatusOK, detailData(1, "0.59", 400, "2026-09-04 01:00:00")
+		}
+		return http.StatusInternalServerError, "{}"
+	})
+	purchase := &countingPurchaseRunner{result: PurchaseRunResult{
+		PlacedCount: 1,
+		PlacedPurchase: &C5PurchaseReceipt{
+			NameCN: "测试物品", PurchasePrice: 57, SteamPrice: "1.10", Ratio: 5182,
+		},
+	}}
+	config := runtimeTestConfig()
+	config.Candidates = c5Candidates(1)
+	config.Purchase = purchase
+	sender := &recordingSender{}
+
+	result, err := RunOneShot(context.Background(), client, stateStore, config, sender)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Purchases.PlacedCount != 1 || result.Notifications != (SendResult{}) {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(sender.alerts) != 1 || sender.alerts[0].Message != "名称：测试物品\n购买价格：0.57\nsteam价格：1.10\n折扣：0.5182" {
+		t.Fatalf("sent alerts = %#v", sender.alerts)
+	}
+	if alerts := pendingAlerts(t, stateStore); len(alerts) != 1 {
+		t.Fatalf("pending ordinary alerts = %#v, want preserved", alerts)
 	}
 }

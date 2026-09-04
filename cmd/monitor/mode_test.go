@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/pluto4816/steam-knife-monitor-go/internal/app"
 )
 
 func TestParseCommandConfigDefaultsToMonitor(t *testing.T) {
@@ -11,7 +13,7 @@ func TestParseCommandConfigDefaultsToMonitor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config != (commandConfig{Mode: modeMonitor, DBPath: defaultDBPath, CandidatePath: defaultCatalogPath}) {
+	if config != (commandConfig{Mode: modeMonitor, DBPath: defaultDBPath, CandidatePath: defaultCatalogPath, C5Purchase: app.C5PurchaseOff}) {
 		t.Fatalf("config = %#v", config)
 	}
 }
@@ -75,5 +77,38 @@ func TestNonProductionModesDoNotRequireQQCredentials(t *testing.T) {
 	}
 	if _, err := senderForMode(modeOnce, &http.Client{}); err == nil {
 		t.Fatal("one-time production mode accepted missing QQ credentials")
+	}
+}
+func TestParseCommandConfigC5PurchaseModes(t *testing.T) {
+	for _, mode := range []app.C5PurchaseMode{app.C5PurchaseOff, app.C5PurchaseDryRun, app.C5PurchaseLive} {
+		config, err := parseCommandConfig([]string{"-mode", "once", "-c5-purchase", string(mode)})
+		if err != nil {
+			t.Fatalf("mode %s: %v", mode, err)
+		}
+		if config.C5Purchase != mode {
+			t.Fatalf("C5 mode = %q, want %q", config.C5Purchase, mode)
+		}
+	}
+	if _, err := parseCommandConfig([]string{"-c5-purchase", "unknown"}); err == nil {
+		t.Fatal("unknown C5 purchase mode was accepted")
+	}
+	for _, mode := range []executionMode{modePreview, modeUpdateCandidates} {
+		if _, err := parseCommandConfig([]string{
+			"-mode", string(mode), "-c5-purchase", "dry-run",
+		}); err == nil || !strings.Contains(err.Error(), "requires -mode monitor or once") {
+			t.Fatalf("mode %s error = %v", mode, err)
+		}
+	}
+}
+
+func TestLiveC5PurchaseRequiresEnvironmentCredentials(t *testing.T) {
+	t.Setenv("C5_APP_KEY", "")
+	t.Setenv("C5_TRADE_URL", "")
+	_, err := newC5PurchaseRunner(
+		commandConfig{C5Purchase: app.C5PurchaseLive},
+		nil, nil, nil, nil, &http.Client{},
+	)
+	if err == nil || !strings.Contains(err.Error(), "C5_APP_KEY") {
+		t.Fatalf("missing C5 credentials error = %v", err)
 	}
 }

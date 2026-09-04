@@ -13,6 +13,7 @@ type OneShotResult struct {
 	Scan          ScanResult
 	DueChecks     DueCheckResult
 	TierCounts    store.ItemTierCounts
+	Purchases     PurchaseRunResult
 	Notifications SendResult
 }
 
@@ -46,6 +47,18 @@ func RunOneShot(
 		return result, fmt.Errorf("summarize item states: %w", err)
 	}
 
+	var purchaseErr error
+	if config.Purchase != nil {
+		result.Purchases, purchaseErr = config.Purchase.Run(ctx)
+		logPurchaseRunResult("C5 purchase phase complete", result.Purchases)
+	}
+	if purchaseErr == nil && result.Purchases.PlacedPurchase != nil {
+		if err := sendC5PurchaseReceipt(ctx, sender, *result.Purchases.PlacedPurchase); err != nil {
+			return result, err
+		}
+		return result, nil
+	}
+
 	if sender != nil {
 		result.Notifications, err = SendPendingAlerts(ctx, stateStore, sender)
 		if err != nil {
@@ -57,6 +70,9 @@ func RunOneShot(
 			return result, fmt.Errorf("list preview alerts: %w", err)
 		}
 		result.Notifications.PendingCount = len(alerts)
+	}
+	if purchaseErr != nil {
+		return result, fmt.Errorf("C5 purchase phase: %w", purchaseErr)
 	}
 	return result, nil
 }

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/pluto4816/steam-knife-monitor-go/internal/app"
+	"github.com/pluto4816/steam-knife-monitor-go/internal/c5"
 	"github.com/pluto4816/steam-knife-monitor-go/internal/catalog"
 	"github.com/pluto4816/steam-knife-monitor-go/internal/collector"
 	"github.com/pluto4816/steam-knife-monitor-go/internal/store"
@@ -20,6 +21,8 @@ import (
 
 const (
 	smisBaseURL              = "https://smis.club"
+	steamCommunityBaseURL    = "https://steamcommunity.com"
+	c5BaseURL                = "https://openapi.c5game.com"
 	byMykelDefinitionsURL    = "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/skins_not_grouped.json"
 	defaultDBPath            = "./steam-knife-monitor.db"
 	defaultCatalogPath       = "./steam-candidates.json"
@@ -39,6 +42,7 @@ type commandConfig struct {
 	DBPath        string
 	CandidatePath string
 	NotifyEmpty   bool
+	C5Purchase    app.C5PurchaseMode
 }
 
 var defaultRunConfig = app.RunConfig{
@@ -99,6 +103,10 @@ func run() error {
 	}
 	runtimeConfig := defaultRunConfig
 	runtimeConfig.Candidates = candidateCatalog.Items
+	var steamPrices app.SteamPriceSource
+	if config.C5Purchase != app.C5PurchaseOff {
+		steamPrices = collector.NewSteamPriceClient(steamCommunityBaseURL, httpClient)
+	}
 
 	sender, err := senderForMode(config.Mode, httpClient)
 	if err != nil {
@@ -119,12 +127,28 @@ func run() error {
 		}
 	}()
 
+	purchaseRunner, err := newC5PurchaseRunner(
+		config, smisClient, steamPrices, stateStore, candidateCatalog.Items, httpClient,
+	)
+	if err != nil {
+		return err
+	}
+	runtimeConfig.Purchase = purchaseRunner
+
 	log.Printf(
 		"candidate catalog loaded: path=%s generated_at=%s candidates=%d",
 		config.CandidatePath,
 		candidateCatalog.GeneratedAt.UTC().Format(time.RFC3339),
 		len(candidateCatalog.Items),
 	)
+	if config.C5Purchase != app.C5PurchaseOff {
+		log.Printf(
+			"C5 purchase configured: mode=%s steam_price_source=SteamCommunityMarket per_order_limit=%s daily_limit=%s timezone=Asia/Shanghai",
+			config.C5Purchase,
+			app.C5PerOrderLimit,
+			app.C5DailyLimit,
+		)
+	}
 	switch config.Mode {
 	case modeMonitor:
 		log.Printf("monitor started: database=%s", config.DBPath)
@@ -181,6 +205,7 @@ func parseCommandConfig(args []string) (commandConfig, error) {
 		Mode:          modeMonitor,
 		DBPath:        defaultDBPath,
 		CandidatePath: defaultCatalogPath,
+		C5Purchase:    app.C5PurchaseOff,
 	}
 	flags := flag.NewFlagSet("monitor", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
@@ -189,6 +214,8 @@ func parseCommandConfig(args []string) (commandConfig, error) {
 	flags.StringVar(&config.DBPath, "db", config.DBPath, "SQLite database path")
 	flags.StringVar(&config.CandidatePath, "candidates", config.CandidatePath, "candidate catalog JSON path")
 	flags.BoolVar(&config.NotifyEmpty, "notify-empty", false, "send a QQ message after a successful one-time scan with no A-tier candidates")
+	c5Purchase := string(config.C5Purchase)
+	flags.StringVar(&c5Purchase, "c5-purchase", c5Purchase, "C5 purchase mode: off, dry-run, or live")
 	if err := flags.Parse(args); err != nil {
 		return commandConfig{}, err
 	}
@@ -203,6 +230,19 @@ func parseCommandConfig(args []string) (commandConfig, error) {
 			"invalid mode %q: want monitor, once, preview, or update-candidates",
 			mode,
 		)
+	}
+	config.C5Purchase = app.C5PurchaseMode(c5Purchase)
+	switch config.C5Purchase {
+	case app.C5PurchaseOff, app.C5PurchaseDryRun, app.C5PurchaseLive:
+	default:
+		return commandConfig{}, fmt.Errorf(
+			"invalid C5 purchase mode %q: want off, dry-run, or live",
+			c5Purchase,
+		)
+	}
+	if config.C5Purchase != app.C5PurchaseOff &&
+		(config.Mode == modePreview || config.Mode == modeUpdateCandidates) {
+		return commandConfig{}, fmt.Errorf("-c5-purchase requires -mode monitor or once")
 	}
 	if config.NotifyEmpty && config.Mode != modeOnce {
 		return commandConfig{}, fmt.Errorf("-notify-empty requires -mode once")
@@ -237,7 +277,7 @@ func logCandidateUpdateSummary(result app.CandidateUpdateResult) {
 
 func logOneShotSummary(label string, result app.OneShotResult) {
 	log.Printf(
-		"%s summary: candidates=%d resumed=%d matched=%d processed=%d duplicates=%d due=%d due_processed=%d tiers=A:%d,B1:%d,B2:%d,B3:%d,C:%d notifications_pending=%d notifications_sent=%d",
+		"%s summary: candidates=%d resumed=%d matched=%d processed=%d duplicates=%d due=%d due_processed=%d tiers=A:%d,B1:%d,B2:%d,B3:%d,C:%d c5_reconciled=%d c5_confirmed=%d c5_excluded=%d c5_dry_run=%d c5_placed=%d c5_rejected=%d notifications_pending=%d notifications_sent=%d",
 		label,
 		result.Scan.CandidateCount,
 		result.Scan.ResumedCount,
@@ -251,9 +291,61 @@ func logOneShotSummary(label string, result app.OneShotResult) {
 		result.TierCounts.B2,
 		result.TierCounts.B3,
 		result.TierCounts.C,
+		result.Purchases.ReconciledCount,
+		result.Purchases.ConfirmedCount,
+		result.Purchases.ExcludedCount,
+		result.Purchases.DryRunCount,
+		result.Purchases.PlacedCount,
+		result.Purchases.RejectedCount,
 		result.Notifications.PendingCount,
 		result.Notifications.SentCount,
 	)
+}
+
+func newC5PurchaseRunner(
+	config commandConfig,
+	smisClient *collector.SMISClient,
+	steamPrices app.SteamPriceSource,
+	stateStore *store.Store,
+	candidates []catalog.Item,
+	httpClient *http.Client,
+) (app.PurchaseRunner, error) {
+	switch config.C5Purchase {
+	case app.C5PurchaseOff:
+		return nil, nil
+	case app.C5PurchaseDryRun:
+		runner, err := app.NewC5PurchaseService(
+			config.C5Purchase, smisClient, steamPrices, stateStore, nil, candidates,
+			defaultRunConfig.RequestDelay,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("configure C5 dry-run purchase service: %w", err)
+		}
+		return runner, nil
+	case app.C5PurchaseLive:
+		client, err := c5.NewClient(
+			c5BaseURL,
+			os.Getenv("C5_APP_KEY"),
+			os.Getenv("C5_TRADE_URL"),
+			httpClient,
+		)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"configure C5 live purchase from C5_APP_KEY and C5_TRADE_URL: %w",
+				err,
+			)
+		}
+		runner, err := app.NewC5PurchaseService(
+			config.C5Purchase, smisClient, steamPrices, stateStore, client, candidates,
+			defaultRunConfig.RequestDelay,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("configure C5 live purchase service: %w", err)
+		}
+		return runner, nil
+	default:
+		return nil, fmt.Errorf("unsupported C5 purchase mode %q", config.C5Purchase)
+	}
 }
 
 func newQQSenderFromEnv(httpClient *http.Client) (*app.QQBotSender, error) {

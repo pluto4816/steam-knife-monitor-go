@@ -55,7 +55,33 @@ CREATE TABLE IF NOT EXISTS targeted_scan_checkpoint (
     catalog_fingerprint TEXT NOT NULL CHECK (length(catalog_fingerprint) = 64),
     completed_count     INTEGER NOT NULL CHECK (completed_count > 0),
     last_item_id        INTEGER NOT NULL CHECK (last_item_id > 0)
-);`
+);
+
+CREATE TABLE IF NOT EXISTS c5_purchases (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id           INTEGER NOT NULL CHECK (item_id > 0),
+    market_hash_name  TEXT NOT NULL CHECK (length(market_hash_name) > 0),
+    name_cn           TEXT NOT NULL CHECK (length(name_cn) > 0),
+    out_trade_no      TEXT NOT NULL UNIQUE CHECK (length(out_trade_no) > 0),
+    quoted_price_fen  INTEGER NOT NULL CHECK (quoted_price_fen BETWEEN 1 AND 100),
+    steam_price       TEXT NOT NULL CHECK (length(steam_price) > 0),
+    ratio_bp          INTEGER NOT NULL CHECK (ratio_bp BETWEEN 0 AND 2147483647),
+    budget_day        TEXT NOT NULL CHECK (length(budget_day) = 10),
+    status            TEXT NOT NULL CHECK (status IN ('SUBMITTING', 'UNCERTAIN', 'PLACED', 'REJECTED')),
+    actual_price_fen  INTEGER
+                      CHECK (actual_price_fen IS NULL OR actual_price_fen BETWEEN 1 AND quoted_price_fen),
+    c5_order_id       TEXT NOT NULL DEFAULT '',
+    last_error        TEXT NOT NULL DEFAULT '',
+    created_at        INTEGER NOT NULL CHECK (created_at >= 0),
+    updated_at        INTEGER NOT NULL CHECK (updated_at >= 0),
+    UNIQUE (item_id, budget_day)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS c5_one_committed_purchase_per_item
+ON c5_purchases(item_id) WHERE status IN ('SUBMITTING', 'UNCERTAIN', 'PLACED');
+
+CREATE INDEX IF NOT EXISTS c5_purchases_status
+ON c5_purchases(status, id);`
 
 const itemStateUpsert = `
 INSERT INTO item_state (

@@ -3,9 +3,9 @@
 A small Go Steam/CS2 knife-opportunity monitor for one process, one user, one SQLite database,
 and QQ official bot C2C notifications.
 
-Go V1 is frozen at tag `v1.0.0`. V2.1 added bounded one-time and preview execution. V2.2 adds
-a manually refreshed candidate catalog and replaces the global smis.club exchange crawl with
-targeted detail requests.
+Go V1 is frozen at tag `v1.0.0`. V2.1 and V2.2 are complete. V2.3 Phase 1 adds an
+explicitly enabled, single-platform C5GAME purchase phase with durable safety controls. Normal
+operation remains unchanged unless C5 purchasing is selected.
 
 ## Candidate catalog
 
@@ -40,16 +40,17 @@ can be backed up with the SQLite database or regenerated with the command above.
 
 The source is ByMykel's MIT-licensed CSGO-API project:
 `https://github.com/ByMykel/CSGO-API`. Its mutable snapshot is structured data generated from CS2
-game files, not proof that an item is currently listed on Steam Community Market. Live ratio,
-volume, and price evidence still comes only from validated smis.club details. An oversized,
-changed, malformed, empty, 401, 403, 429, or challenge response stops the update without
-replacing a valid prior catalog. The update mode no longer calls Steam Community Market.
+game files, not proof that an item is currently listed on Steam Community Market. The candidate
+update does not derive market state from this snapshot. An oversized, changed, malformed, empty,
+401, 403, 429, or challenge response stops the update without replacing a valid prior catalog.
+The update mode does not call Steam Community Market.
 
 ## Execution modes
 
 All normal modes load `./steam-candidates.json` by default. Use `-candidates PATH` to select a
-different catalog. They never download the ByMykel snapshot, call Steam Community Market, or
-run the smis.club candidate search implicitly.
+different catalog. They never download the ByMykel snapshot or run the smis.club candidate
+search implicitly. Steam price requests occur only in the C5 purchase phase, after a current
+A item passes the refreshed C5-lowest and CNY 1.00 prefilter.
 
 ### Preview
 
@@ -130,6 +131,84 @@ go run ./cmd/monitor \
 Conservative runtime defaults are a 24-hour full candidate-detail scan, 60-second due poll,
 1-second detail-request delay, and 5-minute ordinary-error delay. These are operating defaults,
 not upstream official limits.
+
+## C5 purchase phase (V2.3 Phase 1)
+
+C5 purchasing is disabled by default. The existing commands are equivalent to
+`-c5-purchase off`. Only `monitor` and `once` accept a purchase mode;
+`preview` and `update-candidates` reject it.
+
+Test the decision path without C5 credentials, C5 requests, or purchase-ledger mutations:
+
+```sh
+go run ./cmd/monitor \
+  -mode once \
+  -c5-purchase dry-run \
+  -db ./steam-knife-monitor.db \
+  -candidates ./steam-candidates.json
+```
+
+Targeted scans and due checks always use only smis.club data and never call Steam. After those
+phases succeed, the C5 purchase phase starts from persisted current A items and refreshes each
+SMIS detail. It first requires C5 to be the lowest positive platform and the exact C5 price to be
+no greater than CNY 1.00. Only then does it query Steam Community Market's
+`/market/priceoverview/` once, use the exact CNY `lowest_price` to recompute the discount, and
+require base A without hysteresis. The Steam price is used only for payment confirmation; it is
+not persisted into ordinary scan state or QQ alerts. Failures, restrictions, missing prices, or
+unexpected currency prevent purchase without a C5 submission.
+
+Steam transaction volume continues to use smis.club `steamTransactionQuantity`. It remains a
+screening input and is not used as a payment amount or purchase limit.
+
+For every current persisted A-tier candidate that dry-run excludes, it logs
+`C5 purchase dry-run excluded` with a stable `reason` code and relevant refreshed values.
+The phase and one-shot summaries report the total as `excluded` and `c5_excluded`.
+
+Live mode reads the app key and Steam trade URL only from the environment:
+
+```bash
+read -rsp 'C5 app-key: ' C5_APP_KEY
+printf '\n'
+export C5_APP_KEY
+export C5_TRADE_URL='your-steam-trade-url'
+go run ./cmd/monitor \
+  -mode once \
+  -c5-purchase live \
+  -db ./steam-knife-monitor.db \
+  -candidates ./steam-candidates.json
+```
+
+Do not put either value in the repository or command line. They are never intentionally logged.
+Live startup fails closed if either variable is missing.
+
+The fixed Phase 1 controls are:
+
+- one successfully placed or unresolved purchase at most for each catalog item;
+- CNY 1.00 maximum for a single order;
+- CNY 10.00 maximum committed plus unresolved total per Asia/Shanghai calendar day;
+- a fresh smis.club single-item confirmation that checks identity, C5-lowest, and the CNY
+  1.00 limit before requesting one fresh Steam CNY `lowest_price`;
+- a `core.RatioBP` recomputation that must satisfy base A without hysteresis before C5 access;
+- the refreshed C5 price itself is submitted as `maxPrice`, so the C5 server cannot
+  select a listing above the confirmed quote; and
+- a C5 balance check immediately before each reservation and submission.
+
+The purchase phase runs only after a complete targeted scan and successful due checks, and
+before QQ alert delivery. A partial scan or failed due check cannot purchase.
+
+SQLite records `SUBMITTING` before quick-buy. A transport, HTTP, cancellation, or
+malformed-response ambiguity becomes `UNCERTAIN` and is never submitted again with a
+new trade number. Later live runs first query the official order-detail endpoint with the
+original `outTradeNo`; unresolved reconciliation blocks every new purchase. Confirmed
+orders become `PLACED`. Until C5 documents a definitive no-order-created error code, an
+application-level failure also becomes `UNCERTAIN`; `REJECTED` remains reserved for a future
+explicitly verified rejection.
+
+Phase 1 does not recharge, withdraw, create bargains or buy orders, batch-buy, sign in to Steam,
+perform Steam Guard actions, or accept trade offers. It uses only C5GAME's documented
+[balance](https://opendoc.c5game.com/api-423496792),
+[quick-buy](https://opendoc.c5game.com/api-354375293), and
+[order-detail](https://opendoc.c5game.com/api-153195179) endpoints.
 
 ## QQ credentials
 

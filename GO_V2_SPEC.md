@@ -130,8 +130,9 @@ response bytes.
 The definition snapshot and smis.club use different identifiers. A definition without a
 matching smis.club ID is reported by `market_hash_name` and omitted because it cannot yet be
 monitored. It is not a reason to invent an ID. The snapshot describes items defined by the game;
-it does not prove current Steam Community Market availability. Current ratio, volume, and price
-evidence continues to come only from a successfully validated smis.club single-item detail.
+it does not prove current Steam Community Market availability. In the V2.2 baseline, current
+ratio, volume, and price evidence continues to come only from a successfully validated
+smis.club single-item detail; the explicitly enabled V2.3 exception is defined below.
 
 The update performs one snapshot request followed by conservative sequential smis.club requests,
 with no internal retry. It immediately stops on an oversized or empty response, 401, 403, 429,
@@ -151,14 +152,16 @@ The catalog contains only:
 
 It contains no credentials. `monitor`, `once`, and `preview` load this catalog at startup and
 fail clearly when it is missing, empty, or invalid. They never download the ByMykel snapshot,
-call Steam Community Market, or run the smis.club candidate search implicitly.
+or run the smis.club candidate search implicitly. Steam price requests occur only when C5
+purchasing is explicitly enabled, under the V2.3 rules below.
 
 ## Targeted market scan
 
 The production scan no longer paginates `/api/commodity/exchange`. It iterates the persisted
 candidate IDs and calls the already verified `/api/commodity/{id}` detail endpoint sequentially
-with the existing conservative request delay. Each valid detail supplies the ratio, exact price
-text, and `steamTransactionQuantity` used by the unchanged V1 classifier.
+with the existing conservative request delay. Each valid detail supplies the preliminary ratio,
+exact price text, and `steamTransactionQuantity` used by the V2.2 baseline classifier. The
+explicitly enabled V2.3 price-verification rule is defined below.
 
 The same validated detail also selects the lowest strictly positive sell price among BUFF,
 悠悠有品, C5, IGXE, and ECO for alert display. Zero prices mean unavailable and are ignored.
@@ -197,7 +200,7 @@ delivery, or `-notify-empty` completion message may run until the entire catalog
 - V1 classification, scheduling, hysteresis, notification, SQLite, and QQ semantics do not
   change.
 - The candidate update mode needs neither SQLite nor QQ credentials.
-- The normal modes make no ByMykel, Steam Community Market, or exchange requests.
+- Targeted scans and due checks make no ByMykel, Steam Community Market, or exchange requests.
 - Preview continues to use fresh in-memory SQLite while reading the same external candidate
   catalog as the production modes.
 - Candidate replacement is atomic and a failed update preserves the prior catalog.
@@ -219,3 +222,117 @@ delivery, or `-notify-empty` completion message may run until the entire catalog
 Historical samples and decision explanations, operational tooling, and evidence-based rule
 changes remain possible later phases. They are not part of V2.1 or V2.2 and must not be
 implemented as part of the candidate-catalog work.
+
+## V2.3 Phase 1 goal
+
+Add an explicitly enabled C5GAME purchase phase while preserving behavior when it is off and
+preserving the V2.2 scan-completeness boundary. This phase supports only C5GAME's documented
+OpenAPI and only the current single user. Other platforms remain out of scope.
+
+The purchase mode is `off`, `dry-run`, or `live`, selected with `-c5-purchase`. It defaults to
+`off`. `monitor` and `once` accept all three values. `preview` and `update-candidates` require
+`off`. Live mode reads `C5_APP_KEY` and `C5_TRADE_URL` from the environment; neither value may be
+committed or logged.
+
+Phase 1 has fixed safety limits:
+
+- at most one item is bought for a given catalog item ID;
+- the submitted price ceiling is at most CNY 1.00 per order;
+- committed plus unresolved purchases are at most CNY 10.00 per Asia/Shanghai calendar day;
+- no recharge, withdrawal, bargain, buy order, batch order, Steam login, Steam Guard action, or
+  automatic trade-offer acceptance is performed.
+
+## Steam price verification
+
+Targeted full scans and due checks always use only validated smis.club detail data. They never call
+Steam Community Market, even when `-c5-purchase dry-run` or `live` is enabled. Their persisted
+ratio, Steam price, tier state, checkpoint, and ordinary QQ alerts therefore remain based on SMIS.
+
+The purchase phase starts from persisted current A-tier candidates only after the full scan and
+due-check phases succeed. It refreshes the smis.club single-item detail and, before any Steam
+request, requires the exact catalog identity, C5 as the lowest strictly positive external
+platform, and a positive exact C5 price no greater than CNY 1.00. Candidates that fail any of
+those checks do not call Steam.
+
+Only a candidate that passes that purchase prefilter queries Steam Community Market
+`/market/priceoverview/` with app ID `730`, currency `23`, and the exact catalog
+`market_hash_name`. The endpoint is hosted by Steam Community Market but is not a documented
+Steamworks Web API. The implementation accepts only a successful, positive CNY `lowest_price`,
+preserves it as an exact decimal string, and recomputes `core.RatioBP` exactly from it and the
+refreshed smis.club C5 price. The recomputed evidence must satisfy the base A rule without
+hysteresis before any balance query or purchase submission. This Steam value is a
+payment-confirmation input; it does not replace ordinary SMIS state or alert data.
+
+`steamTransactionQuantity` continues to come from smis.club and remains only a classification
+screening input; it is not a payment amount or direct purchase limit. Steam requests are
+sequential and have no internal retry. An empty response, 401, 403, 429, challenge HTML,
+malformed response, unsuccessful response, missing price, or invalid currency prevents purchase
+and ends that purchase attempt without submitting to C5. When C5 purchasing is `off`, no Steam
+Community Market request is made.
+
+## C5 purchase eligibility and confirmation
+
+A purchase phase may run only after the active targeted full scan has completed and cleared its
+checkpoint. It runs after a successful due-check phase and before ordinary QQ alert delivery.
+An incomplete full scan or failed due-check performs no purchase work.
+
+Each persisted current A-tier catalog item not already bought or unresolved is re-fetched from
+the verified smis.club single-item detail endpoint immediately before a decision. The checks run
+in this fixed order:
+
+1. require the exact catalog item ID and `market_hash_name`;
+2. require C5 as the lowest strictly positive external sell platform;
+3. require a positive exact smis.club C5 price no greater than CNY 1.00;
+4. request one positive exact Steam `lowest_price`;
+5. recompute `core.RatioBP` from the Steam price and C5 price; and
+6. require the recomputed evidence to satisfy base A without hysteresis.
+
+Dry-run mode stops after this validation and reports what it would submit. It requires no C5
+credential and never calls C5GAME or creates a purchase record.
+
+Every current persisted A-tier candidate excluded in dry-run must produce a log entry with a
+stable reason code and the relevant non-secret persisted or refreshed values. Dry-run phase and
+one-shot summaries must report the number of excluded candidates.
+
+Live mode queries the documented C5GAME account-balance endpoint before submitting. The exact
+refreshed smis C5 price, not the CNY 1.00 absolute limit, becomes `maxPrice` on C5GAME's
+documented quick-buy request. The request uses `marketHashName`, app ID 730, the configured trade
+URL, and a durable unique `outTradeNo`; it leaves optional delivery and low-price selectors
+unset so C5GAME applies its documented default lowest-price selection. A successful response
+must contain a positive `actualPay` no greater than the submitted ceiling and a positive order
+ID.
+
+## C5 purchase durability
+
+Before the first quick-buy request, SQLite atomically reserves the item, the daily budget, the
+quoted amount, and `outTradeNo` with status `SUBMITTING`. `SUBMITTING` and `UNCERTAIN` amounts
+remain reserved in the daily budget. A successfully created order becomes `PLACED`. An
+application-level failure must currently become `UNCERTAIN`: the published API does not define
+which error codes prove that no order was created. `REJECTED` is reserved for a future explicitly
+verified definitive-rejection code, and no second attempt is made for that item on the same
+calendar day.
+
+An HTTP, transport, cancellation, malformed-response, or local persistence ambiguity after a
+submission starts must never cause an automatic resubmission. The purchase becomes `UNCERTAIN`.
+Before any new live purchase, unresolved rows are queried through C5GAME's documented order
+detail endpoint using the original `outTradeNo`. A found order becomes `PLACED`; any unresolved
+or failed reconciliation stops new purchase submission for that phase.
+
+C5GAME requests are sequential, use no internal retry, and treat 401, 403, 429, empty responses,
+and challenge-like HTML as access restrictions. The app key is placed only in the documented
+query parameter and must be redacted from all returned errors.
+
+## V2.3 Phase 1 acceptance criteria
+
+- Existing operation is unchanged when `-c5-purchase off` is omitted.
+- Targeted scans and due checks never call Steam; purchase confirmation calls it only after the
+  C5-lowest and CNY 1.00 prefilter.
+- Dry-run performs real smis and Steam confirmation but no C5 request or SQLite purchase mutation.
+- Dry-run reports each exclusion reason and its total without logging credentials.
+- Live mode cannot start without both C5 environment values.
+- Partial scans and failed due checks cannot reach the purchase phase.
+- Base-A, C5-lowest, exact identity, exact price, balance, per-order, per-item, and daily limits
+  are enforced before quick-buy.
+- An ambiguous submission is never retried with a new order number.
+- Restart reconciliation uses the original `outTradeNo` before any new purchase.
+- `gofmt`, `go test ./...`, and `go vet ./...` pass.

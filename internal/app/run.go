@@ -22,6 +22,8 @@ type RunConfig struct {
 	// Candidates is nil only for the frozen V1 scan tests. Production modes load
 	// a non-empty persisted catalog and therefore always use targeted details.
 	Candidates []catalog.Item
+
+	Purchase PurchaseRunner
 }
 
 func Run(
@@ -37,11 +39,13 @@ func Run(
 
 	var nextFullScanAttempt time.Time
 	var nextNotificationAttempt time.Time
+	var nextPurchaseAttempt time.Time
 	for {
 		if ctx.Err() != nil {
 			return nil
 		}
 
+		purchaseNeeded := false
 		if nextFullScanAttempt.IsZero() || !time.Now().UTC().Before(nextFullScanAttempt) {
 			result, err := runConfiguredScan(ctx, client, stateStore, config)
 			completedAt := time.Now().UTC()
@@ -78,6 +82,7 @@ func Run(
 					result.DuplicateCount,
 				)
 				nextFullScanAttempt = completedAt.Add(config.FullScanInterval)
+				purchaseNeeded = true
 			}
 
 			if err := waitContext(ctx, config.RequestDelay); err != nil {
@@ -110,6 +115,40 @@ func Run(
 		}
 
 		now := time.Now().UTC()
+		if dueErr == nil && config.Purchase != nil &&
+			(purchaseNeeded || result.ProcessedCount > 0 || !nextPurchaseAttempt.IsZero()) &&
+			(nextPurchaseAttempt.IsZero() || !now.Before(nextPurchaseAttempt)) {
+			purchaseResult, err := config.Purchase.Run(ctx)
+			completedAt := time.Now().UTC()
+			if err != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
+				log.Printf(
+					"C5 purchase phase error: reconciled=%d confirmed=%d excluded=%d dry_run=%d placed=%d rejected=%d: %v",
+					purchaseResult.ReconciledCount,
+					purchaseResult.ConfirmedCount,
+					purchaseResult.ExcludedCount,
+					purchaseResult.DryRunCount,
+					purchaseResult.PlacedCount,
+					purchaseResult.RejectedCount,
+					err,
+				)
+				nextPurchaseAttempt = completedAt.Add(config.ErrorDelay)
+			} else {
+				logPurchaseRunResult("C5 purchase phase complete", purchaseResult)
+				nextPurchaseAttempt = time.Time{}
+				if purchaseResult.PlacedPurchase != nil {
+					if err := sendC5PurchaseReceipt(ctx, sender, *purchaseResult.PlacedPurchase); err != nil {
+						return err
+					}
+					log.Printf("C5 purchase receipt sent; monitor stopping after first purchase")
+					return nil
+				}
+			}
+		}
+
+		now = time.Now().UTC()
 		if sender != nil && (nextNotificationAttempt.IsZero() || !now.Before(nextNotificationAttempt)) {
 			sendResult, err := SendPendingAlerts(ctx, stateStore, sender)
 			completedAt := time.Now().UTC()
@@ -149,7 +188,9 @@ func runConfiguredScan(
 	config RunConfig,
 ) (ScanResult, error) {
 	if config.Candidates != nil {
-		return RunTargetedScanCycle(ctx, client, stateStore, config.Candidates, config.RequestDelay)
+		return RunTargetedScanCycle(
+			ctx, client, stateStore, config.Candidates, config.RequestDelay,
+		)
 	}
 	return RunScanCycle(ctx, client, stateStore, config.PageDelay)
 }
@@ -188,4 +229,20 @@ func waitContext(ctx context.Context, delay time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+func logPurchaseRunResult(label string, result PurchaseRunResult) {
+	if result.ReconciledCount == 0 &&
+		result.ConfirmedCount == 0 &&
+		result.ExcludedCount == 0 &&
+		result.DryRunCount == 0 &&
+		result.PlacedCount == 0 &&
+		result.RejectedCount == 0 {
+		return
+	}
+	log.Printf(
+		"%s: reconciled=%d confirmed=%d excluded=%d dry_run=%d placed=%d rejected=%d",
+		label, result.ReconciledCount, result.ConfirmedCount, result.ExcludedCount, result.DryRunCount,
+		result.PlacedCount, result.RejectedCount,
+	)
 }

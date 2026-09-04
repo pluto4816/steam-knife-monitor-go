@@ -388,6 +388,39 @@ func TestRunNotificationFailureUsesErrorDelayAndKeepsMonitoring(t *testing.T) {
 	}
 }
 
+func TestRunSendsPurchaseReceiptAndStops(t *testing.T) {
+	client, requests := runtimeTestClient(t, func(_ string, path string, _ int) (int, string) {
+		if path == "/api/commodity/1" {
+			return http.StatusOK, detailData(1, "0.59", 400, "2026-09-04 01:00:00")
+		}
+		return http.StatusInternalServerError, "{}"
+	})
+	purchase := &countingPurchaseRunner{result: PurchaseRunResult{
+		PlacedCount: 1,
+		PlacedPurchase: &C5PurchaseReceipt{
+			NameCN: "测试物品", PurchasePrice: 57, SteamPrice: "1.10", Ratio: 5182,
+		},
+	}}
+	config := runtimeTestConfig()
+	config.Candidates = c5Candidates(1)
+	config.Purchase = purchase
+	sender := &recordingSender{}
+
+	if err := Run(context.Background(), client, openTestStore(t), config, sender); err != nil {
+		t.Fatal(err)
+	}
+	if purchase.calls != 1 || requests.countPath("/api/commodity/1") != 1 {
+		t.Fatalf("calls: purchase=%d detail=%d", purchase.calls, requests.countPath("/api/commodity/1"))
+	}
+	if len(sender.alerts) != 1 {
+		t.Fatalf("sent alerts = %#v", sender.alerts)
+	}
+	want := "名称：测试物品\n购买价格：0.57\nsteam价格：1.10\n折扣：0.5182"
+	if sender.alerts[0].Message != want {
+		t.Fatalf("purchase receipt = %q, want %q", sender.alerts[0].Message, want)
+	}
+}
+
 func runtimeTestConfig() RunConfig {
 	return RunConfig{
 		FullScanInterval: time.Hour,
