@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pluto4816/steam-knife-monitor-go/internal/c5"
 	"github.com/pluto4816/steam-knife-monitor-go/internal/core"
 	"github.com/pluto4816/steam-knife-monitor-go/internal/store"
 )
@@ -271,6 +272,21 @@ func TestSendPendingAlertsAtLeastOnceAfterMarkFailure(t *testing.T) {
 	}
 	if result.SentCount != 1 || len(secondSender.alerts) != 1 {
 		t.Fatalf("second attempt result=%#v calls=%d", result, len(secondSender.alerts))
+	}
+}
+func TestSendManualC5PurchaseReceipt(t *testing.T) {
+	sender := &recordingSender{}
+	err := SendC5PurchaseReceipt(context.Background(), sender, C5PurchaseReceipt{
+		NameCN:        "FN57 | 暗夜聚合 (久经沙场)",
+		PurchasePrice: c5.MoneyFen(88),
+		ManualTest:    true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "人工测试购买成功\n名称：FN57 | 暗夜聚合 (久经沙场)\n购买价格：0.88"
+	if len(sender.alerts) != 1 || sender.alerts[0].Message != want {
+		t.Fatalf("alerts = %#v", sender.alerts)
 	}
 }
 

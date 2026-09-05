@@ -44,7 +44,7 @@ func RunTargetedScanCycle(
 		previousID = candidate.ItemID
 	}
 
-	fingerprint, err := targetedCatalogFingerprint(ordered)
+	fingerprint, err := TargetedCatalogFingerprint(ordered)
 	if err != nil {
 		return result, err
 	}
@@ -116,11 +116,22 @@ func RunTargetedScanCycle(
 	if err := stateStore.ClearTargetedScanCheckpoint(ctx, fingerprint); err != nil {
 		return result, fmt.Errorf("clear completed targeted scan checkpoint: %w", err)
 	}
+	if err := stateStore.SaveTargetedScanCompletion(ctx, store.TargetedScanCompletion{
+		CatalogFingerprint: fingerprint,
+		CandidateCount:     len(ordered),
+		CompletedAt:        time.Now().UTC(),
+	}); err != nil {
+		return result, fmt.Errorf("save targeted scan completion: %w", err)
+	}
 	return result, nil
 }
 
-func targetedCatalogFingerprint(candidates []catalog.Item) (string, error) {
-	encoded, err := json.Marshal(candidates)
+func TargetedCatalogFingerprint(candidates []catalog.Item) (string, error) {
+	ordered := append([]catalog.Item(nil), candidates...)
+	sort.Slice(ordered, func(left, right int) bool {
+		return ordered[left].ItemID < ordered[right].ItemID
+	})
+	encoded, err := json.Marshal(ordered)
 	if err != nil {
 		return "", fmt.Errorf("encode targeted candidate catalog fingerprint: %w", err)
 	}

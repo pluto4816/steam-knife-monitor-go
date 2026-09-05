@@ -42,6 +42,7 @@ type C5PurchaseReceipt struct {
 	PurchasePrice c5.MoneyFen
 	SteamPrice    string
 	Ratio         core.RatioBP
+	ManualTest    bool
 }
 
 type PurchaseRunner interface {
@@ -116,7 +117,9 @@ func NewC5PurchaseService(
 func (service *C5PurchaseService) Run(ctx context.Context) (PurchaseRunResult, error) {
 	var result PurchaseRunResult
 	if service.mode == C5PurchaseLive {
-		reconciled, placedPurchase, err := service.reconcile(ctx)
+		reconciled, placedPurchase, err := reconcileC5Purchases(
+			ctx, service.stateStore, service.c5Client, service.now,
+		)
 		result.ReconciledCount = reconciled
 		result.PlacedPurchase = placedPurchase
 		if err != nil {
@@ -263,6 +266,7 @@ func (service *C5PurchaseService) Run(ctx context.Context) (PurchaseRunResult, e
 			SteamPrice:     item.SteamPrice,
 			Ratio:          item.MarketData.Ratio,
 			BudgetDay:      budgetDay,
+			Kind:           store.C5PurchaseAuto,
 			CreatedAt:      now,
 		})
 		if errors.Is(err, store.ErrC5ItemHandled) {
@@ -302,7 +306,7 @@ func (service *C5PurchaseService) Run(ctx context.Context) (PurchaseRunResult, e
 			return result, errors.New(message)
 		}
 		receipt, err := newC5PurchaseReceipt(
-			candidate.NameCN, quickResult.ActualPay, item.SteamPrice,
+			candidate.NameCN, quickResult.ActualPay, item.SteamPrice, store.C5PurchaseAuto,
 		)
 		if err != nil {
 			_ = service.stateStore.MarkC5PurchaseUncertain(ctx, purchase.ID, err.Error(), service.now())
@@ -353,17 +357,22 @@ func (service *C5PurchaseService) logDryRunExclusion(
 	)
 }
 
-func (service *C5PurchaseService) reconcile(ctx context.Context) (int, *C5PurchaseReceipt, error) {
-	purchases, err := service.stateStore.ListUnresolvedC5Purchases(ctx)
+func reconcileC5Purchases(
+	ctx context.Context,
+	stateStore *store.Store,
+	c5Client c5API,
+	now func() time.Time,
+) (int, *C5PurchaseReceipt, error) {
+	purchases, err := stateStore.ListUnresolvedC5Purchases(ctx)
 	if err != nil {
 		return 0, nil, err
 	}
 	reconciled := 0
 	for _, purchase := range purchases {
-		order, err := service.c5Client.OrderByOutTradeNo(ctx, purchase.OutTradeNo)
+		order, err := c5Client.OrderByOutTradeNo(ctx, purchase.OutTradeNo)
 		if err != nil {
-			_ = service.stateStore.MarkC5PurchaseUncertain(
-				ctx, purchase.ID, err.Error(), service.now(),
+			_ = stateStore.MarkC5PurchaseUncertain(
+				ctx, purchase.ID, err.Error(), now(),
 			)
 			return reconciled, nil, fmt.Errorf(
 				"reconcile C5 purchase %s: %w",
@@ -380,17 +389,17 @@ func (service *C5PurchaseService) reconcile(ctx context.Context) (int, *C5Purcha
 			)
 		}
 		receipt, err := newC5PurchaseReceipt(
-			purchase.NameCN, order.ActualPay, purchase.SteamPrice,
+			purchase.NameCN, order.ActualPay, purchase.SteamPrice, purchase.Kind,
 		)
 		if err != nil {
 			return reconciled, nil, err
 		}
-		if err := service.stateStore.MarkC5PurchasePlaced(
+		if err := stateStore.MarkC5PurchasePlaced(
 			ctx,
 			purchase.ID,
 			order.ActualPay,
 			order.OrderID,
-			service.now(),
+			now(),
 		); err != nil {
 			return reconciled, nil, fmt.Errorf("persist reconciled C5 purchase: %w", err)
 		}
@@ -404,7 +413,13 @@ func newC5PurchaseReceipt(
 	nameCN string,
 	purchasePrice c5.MoneyFen,
 	steamPrice string,
+	kind store.C5PurchaseKind,
 ) (C5PurchaseReceipt, error) {
+	if kind == store.C5PurchaseManualTest {
+		return C5PurchaseReceipt{
+			NameCN: nameCN, PurchasePrice: purchasePrice, ManualTest: true,
+		}, nil
+	}
 	ratio, err := collector.CalculateRatioBP(steamPrice, purchasePrice.String())
 	if err != nil {
 		return C5PurchaseReceipt{}, fmt.Errorf("calculate actual C5 purchase ratio: %w", err)

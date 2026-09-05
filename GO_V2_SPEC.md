@@ -191,6 +191,16 @@ starts from its first item. Completing the full catalog clears the checkpoint be
 or notification delivery. State persistence precedes checkpoint persistence, so a crash between
 the two may repeat one safe item but can never skip an unpersisted item.
 
+After a complete targeted scan clears its checkpoint, it persists a completion receipt with the
+exact catalog fingerprint, candidate count, and UTC completion time. On `monitor` restart only,
+the initial full scan is skipped when the receipt is less than 24 hours old, its fingerprint and
+count match the exact current catalog, every catalog item ID, `market_hash_name`, and display
+name has exactly one persisted state, and no checkpoint exists. The next full scan remains due
+24 hours after the persisted completion rather than 24 hours after restart. The resumed monitor
+runs due checks before its first purchase phase. A missing, future, expired, or mismatched
+receipt, any incomplete or extra state, or any checkpoint requires the normal targeted full
+scan. `once` and `preview` never use this restart shortcut.
+
 Resumed items count only as a completed prefix; they are not fetched again and are reported
 separately in scan summaries. Even with a checkpoint, no due-check, tier summary, pending-alert
 delivery, or `-notify-empty` completion message may run until the entire catalog has completed.
@@ -273,8 +283,11 @@ Community Market request is made.
 ## C5 purchase eligibility and confirmation
 
 A purchase phase may run only after the active targeted full scan has completed and cleared its
-checkpoint. It runs after a successful due-check phase and before ordinary QQ alert delivery.
-An incomplete full scan or failed due-check performs no purchase work.
+checkpoint, or after `monitor` restart has verified the recent durable full-scan receipt and
+exact complete catalog state under the restart rule above. It runs after a successful due-check
+phase and before ordinary QQ alert delivery. A checkpoint, incomplete state, expired or
+mismatched receipt, incomplete full scan, or failed due-check performs no purchase work before
+the normal full scan succeeds.
 
 Each persisted current A-tier catalog item not already bought or unresolved is re-fetched from
 the verified smis.club single-item detail endpoint immediately before a decision. The checks run
@@ -322,6 +335,24 @@ C5GAME requests are sequential, use no internal retry, and treat 401, 403, 429, 
 and challenge-like HTML as access restrictions. The app key is placed only in the documented
 query parameter and must be redacted from all returned errors.
 
+## Manual specified-item purchase test
+
+The explicit one-shot `purchase-test` command is an authorized exception to the automatic
+purchase eligibility flow. It must:
+
+1. require `-c5-purchase live` and one positive catalog `item_id`;
+2. resolve the exact `market_hash_name` and Chinese name from the existing persisted catalog;
+3. make no SMIS or Steam request and require neither SMIS identity/tier state nor C5-lowest;
+4. submit exactly one quick-buy with `maxPrice=1.00`; and
+5. exit after success or the first failure without automatic quick-buy retry.
+
+The only market-price eligibility condition is the server-enforced CNY 1.00 ceiling. The
+ordinary balance, CNY 10.00 Asia/Shanghai daily budget, durable per-item reservation, unique
+trade number, and unresolved-order reconciliation controls remain mandatory. A successful
+response must report a positive `actualPay` no greater than CNY 1.00. Its ledger row is marked
+`MANUAL_TEST`; existing rows migrate to `AUTO`. This exception changes no behavior in
+`monitor`, `once`, dry-run, targeted scans, due checks, or automatic purchase confirmation.
+
 ## V2.3 Phase 1 acceptance criteria
 
 - Existing operation is unchanged when `-c5-purchase off` is omitted.
@@ -331,8 +362,12 @@ query parameter and must be redacted from all returned errors.
 - Dry-run reports each exclusion reason and its total without logging credentials.
 - Live mode cannot start without both C5 environment values.
 - Partial scans and failed due checks cannot reach the purchase phase.
-- Base-A, C5-lowest, exact identity, exact price, balance, per-order, per-item, and daily limits
-  are enforced before quick-buy.
+- A monitor restart skips its initial full scan only with a matching recent durable completion,
+  exact complete catalog state, and no checkpoint; its first purchase still follows due checks.
+- Automatic purchases enforce Base-A, C5-lowest, exact identity, exact price, balance, per-order,
+  per-item, and daily limits before quick-buy.
+- `purchase-test` bypasses only SMIS/Steam/tier/platform comparisons, submits the selected
+  catalog identity once with `maxPrice=1.00`, and records `MANUAL_TEST`.
 - An ambiguous submission is never retried with a new order number.
 - Restart reconciliation uses the original `outTradeNo` before any new purchase.
 - `gofmt`, `go test ./...`, and `go vet ./...` pass.

@@ -132,11 +132,20 @@ Conservative runtime defaults are a 24-hour full candidate-detail scan, 60-secon
 1-second detail-request delay, and 5-minute ordinary-error delay. These are operating defaults,
 not upstream official limits.
 
+Each successful targeted full scan persists a completion receipt. On `monitor` restart, the
+initial 426-item scan is skipped only when the receipt is less than 24 hours old, its catalog
+fingerprint and candidate count match, all persisted item identities exactly cover the current
+catalog, and no partial-scan checkpoint exists. Due checks run immediately, the live purchase
+phase remains enabled, and the next full scan stays scheduled 24 hours after the saved
+completion time. If any check fails, monitor performs the normal full scan. `once` and
+`preview` always perform their normal bounded scans.
+
 ## C5 purchase phase (V2.3 Phase 1)
 
 C5 purchasing is disabled by default. The existing commands are equivalent to
-`-c5-purchase off`. Only `monitor` and `once` accept a purchase mode;
-`preview` and `update-candidates` reject it.
+`-c5-purchase off`. Automatic `dry-run` or `live` purchasing is accepted by `monitor` and
+`once`; the separate one-shot `purchase-test` mode accepts only `live`. `preview` and
+`update-candidates` reject purchasing.
 
 Test the decision path without C5 credentials, C5 requests, or purchase-ledger mutations:
 
@@ -193,8 +202,10 @@ The fixed Phase 1 controls are:
   select a listing above the confirmed quote; and
 - a C5 balance check immediately before each reservation and submission.
 
-The purchase phase runs only after a complete targeted scan and successful due checks, and
-before QQ alert delivery. A partial scan or failed due check cannot purchase.
+The purchase phase runs only after a complete targeted scan and successful due checks, or after
+a monitor restart verifies the matching recent completion receipt and exact complete state and
+then completes due checks. It runs before QQ alert delivery. A partial scan, unsafe restart
+state, or failed due check cannot purchase.
 
 SQLite records `SUBMITTING` before quick-buy. A transport, HTTP, cancellation, or
 malformed-response ambiguity becomes `UNCERTAIN` and is never submitted again with a
@@ -209,6 +220,27 @@ perform Steam Guard actions, or accept trade offers. It uses only C5GAME's docum
 [balance](https://opendoc.c5game.com/api-423496792),
 [quick-buy](https://opendoc.c5game.com/api-354375293), and
 [order-detail](https://opendoc.c5game.com/api-153195179) endpoints.
+
+## One-shot manual C5 purchase test
+
+Use `purchase-test` only for an explicitly selected item already present in the candidate
+catalog. It bypasses SMIS, Steam, tier, and lowest-platform checks. Its only market-price
+condition is the C5-enforced fixed ceiling of CNY 1.00:
+
+```bash
+go run ./cmd/monitor \
+  -mode purchase-test \
+  -c5-purchase live \
+  -c5-item-id 79171 \
+  -db ./steam-knife-monitor.db \
+  -candidates ./steam-candidates.json
+```
+
+The command resolves the exact name from the catalog, checks C5 balance, reserves the item and
+daily budget in SQLite as `MANUAL_TEST`, submits at most one quick-buy request with
+`maxPrice=1.00`, sends a QQ success receipt, and exits. It never automatically resubmits an
+ambiguous request; a later live run reconciles the original `outTradeNo` first. The ordinary
+CNY 10.00 daily limit and one-committed-purchase-per-item rule remain active.
 
 ## QQ credentials
 

@@ -95,8 +95,34 @@ func TestParseCommandConfigC5PurchaseModes(t *testing.T) {
 	for _, mode := range []executionMode{modePreview, modeUpdateCandidates} {
 		if _, err := parseCommandConfig([]string{
 			"-mode", string(mode), "-c5-purchase", "dry-run",
-		}); err == nil || !strings.Contains(err.Error(), "requires -mode monitor or once") {
+		}); err == nil || !strings.Contains(err.Error(), "requires -mode monitor, once, or purchase-test") {
 			t.Fatalf("mode %s error = %v", mode, err)
+		}
+	}
+}
+
+func TestParseCommandConfigPurchaseTest(t *testing.T) {
+	config, err := parseCommandConfig([]string{
+		"-mode", "purchase-test",
+		"-c5-purchase", "live",
+		"-c5-item-id", "79171",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Mode != modePurchaseTest || config.C5Purchase != app.C5PurchaseLive || config.C5ItemID != 79171 {
+		t.Fatalf("config = %#v", config)
+	}
+
+	invalid := [][]string{
+		{"-mode", "purchase-test", "-c5-item-id", "79171"},
+		{"-mode", "purchase-test", "-c5-purchase", "dry-run", "-c5-item-id", "79171"},
+		{"-mode", "purchase-test", "-c5-purchase", "live"},
+		{"-mode", "once", "-c5-item-id", "79171"},
+	}
+	for _, args := range invalid {
+		if _, err := parseCommandConfig(args); err == nil {
+			t.Fatalf("arguments %#v were accepted", args)
 		}
 	}
 }

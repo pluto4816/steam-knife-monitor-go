@@ -2,8 +2,10 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -106,6 +108,58 @@ func TestC5PurchaseCannotPlaceAboveReservedQuote(t *testing.T) {
 	}
 	if len(unresolved) != 1 || unresolved[0].Status != C5PurchaseSubmitting {
 		t.Fatalf("purchase after rejected transition = %#v", unresolved)
+	}
+}
+
+func TestC5PurchaseKindMigratesExistingLedger(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old-ledger.db")
+	database, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = database.Exec(`
+CREATE TABLE c5_purchases (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id INTEGER NOT NULL,
+    market_hash_name TEXT NOT NULL,
+    name_cn TEXT NOT NULL,
+    out_trade_no TEXT NOT NULL UNIQUE,
+    quoted_price_fen INTEGER NOT NULL,
+    steam_price TEXT NOT NULL,
+    ratio_bp INTEGER NOT NULL,
+    budget_day TEXT NOT NULL,
+    status TEXT NOT NULL,
+    actual_price_fen INTEGER,
+    c5_order_id TEXT NOT NULL DEFAULT '',
+    last_error TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE (item_id, budget_day)
+)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	stateStore, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stateStore.Close()
+	now := time.Date(2026, 9, 5, 4, 0, 0, 0, time.UTC)
+	params := c5PurchaseParams(77, now)
+	params.Kind = C5PurchaseManualTest
+	if _, err := stateStore.BeginC5Purchase(context.Background(), params); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := stateStore.ListUnresolvedC5Purchases(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Kind != C5PurchaseManualTest {
+		t.Fatalf("rows = %#v", rows)
 	}
 }
 

@@ -57,6 +57,13 @@ CREATE TABLE IF NOT EXISTS targeted_scan_checkpoint (
     last_item_id        INTEGER NOT NULL CHECK (last_item_id > 0)
 );
 
+CREATE TABLE IF NOT EXISTS targeted_scan_completion (
+    singleton           INTEGER PRIMARY KEY CHECK (singleton = 1),
+    catalog_fingerprint TEXT NOT NULL CHECK (length(catalog_fingerprint) = 64),
+    candidate_count     INTEGER NOT NULL CHECK (candidate_count > 0),
+    completed_at        INTEGER NOT NULL CHECK (completed_at >= 0)
+);
+
 CREATE TABLE IF NOT EXISTS c5_purchases (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
     item_id           INTEGER NOT NULL CHECK (item_id > 0),
@@ -74,6 +81,8 @@ CREATE TABLE IF NOT EXISTS c5_purchases (
     last_error        TEXT NOT NULL DEFAULT '',
     created_at        INTEGER NOT NULL CHECK (created_at >= 0),
     updated_at        INTEGER NOT NULL CHECK (updated_at >= 0),
+    purchase_kind     TEXT NOT NULL DEFAULT 'AUTO'
+                      CHECK (purchase_kind IN ('AUTO', 'MANUAL_TEST')),
     UNIQUE (item_id, budget_day)
 );
 
@@ -137,6 +146,9 @@ func Open(path string) (*Store, error) {
 func (store *Store) initSchema() error {
 	if _, err := store.db.Exec(schema); err != nil {
 		return fmt.Errorf("initialize SQLite schema: %w", err)
+	}
+	if err := store.ensureC5PurchaseKindColumn(); err != nil {
+		return err
 	}
 	return nil
 }

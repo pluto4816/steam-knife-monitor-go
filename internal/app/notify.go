@@ -22,13 +22,24 @@ type SendResult struct {
 
 const noSuitableItemsMessage = "没有合适物品"
 
-func sendC5PurchaseReceipt(
+func SendC5PurchaseReceipt(
 	ctx context.Context,
 	sender Sender,
 	receipt C5PurchaseReceipt,
 ) error {
 	if sender == nil {
 		return fmt.Errorf("sender cannot be nil")
+	}
+	if receipt.ManualTest {
+		message := fmt.Sprintf(
+			"人工测试购买成功\n名称：%s\n购买价格：%s",
+			receipt.NameCN,
+			receipt.PurchasePrice,
+		)
+		if err := sender.Send(ctx, store.Alert{Message: message}); err != nil {
+			return fmt.Errorf("send manual C5 purchase test receipt: %w", err)
+		}
+		return nil
 	}
 	message := fmt.Sprintf(
 		"名称：%s\n购买价格：%s\nsteam价格：%s\n折扣：%s",

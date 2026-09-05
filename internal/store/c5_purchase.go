@@ -24,6 +24,12 @@ var (
 )
 
 type C5PurchaseStatus string
+type C5PurchaseKind string
+
+const (
+	C5PurchaseAuto       C5PurchaseKind = "AUTO"
+	C5PurchaseManualTest C5PurchaseKind = "MANUAL_TEST"
+)
 
 const (
 	C5PurchaseSubmitting C5PurchaseStatus = "SUBMITTING"
@@ -46,6 +52,7 @@ type C5Purchase struct {
 	ActualPrice    c5.MoneyFen
 	C5OrderID      string
 	LastError      string
+	Kind           C5PurchaseKind
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 }
@@ -59,6 +66,7 @@ type BeginC5PurchaseParams struct {
 	SteamPrice     string
 	Ratio          core.RatioBP
 	BudgetDay      string
+	Kind           C5PurchaseKind
 	CreatedAt      time.Time
 }
 
@@ -85,6 +93,9 @@ WHERE item_id = ?
 }
 
 func (store *Store) BeginC5Purchase(ctx context.Context, params BeginC5PurchaseParams) (C5Purchase, error) {
+	if params.Kind == "" {
+		params.Kind = C5PurchaseAuto
+	}
 	if err := validateBeginC5Purchase(params); err != nil {
 		return C5Purchase{}, err
 	}
@@ -132,8 +143,8 @@ WHERE budget_day = ?`, params.BudgetDay).Scan(&reserved)
 	result, err := transaction.ExecContext(ctx, `
 INSERT INTO c5_purchases (
     item_id, market_hash_name, name_cn, out_trade_no, quoted_price_fen,
-    steam_price, ratio_bp, budget_day, status, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'SUBMITTING', ?, ?)`,
+    steam_price, ratio_bp, budget_day, status, created_at, updated_at, purchase_kind
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'SUBMITTING', ?, ?, ?)`,
 		params.ItemID,
 		params.MarketHashName,
 		params.NameCN,
@@ -144,6 +155,7 @@ INSERT INTO c5_purchases (
 		params.BudgetDay,
 		createdAt,
 		createdAt,
+		string(params.Kind),
 	)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
@@ -169,6 +181,7 @@ INSERT INTO c5_purchases (
 		Ratio:          params.Ratio,
 		BudgetDay:      params.BudgetDay,
 		Status:         C5PurchaseSubmitting,
+		Kind:           params.Kind,
 		CreatedAt:      params.CreatedAt.UTC(),
 		UpdatedAt:      params.CreatedAt.UTC(),
 	}, nil
@@ -178,7 +191,7 @@ func (store *Store) ListUnresolvedC5Purchases(ctx context.Context) ([]C5Purchase
 	rows, err := store.db.QueryContext(ctx, `
 SELECT id, item_id, market_hash_name, name_cn, out_trade_no, quoted_price_fen,
        steam_price, ratio_bp, budget_day, status, actual_price_fen,
-       c5_order_id, last_error, created_at, updated_at
+       c5_order_id, last_error, created_at, updated_at, purchase_kind
 FROM c5_purchases
 WHERE status IN ('SUBMITTING', 'UNCERTAIN')
 ORDER BY id ASC`)
@@ -335,7 +348,7 @@ func scanC5Purchase(row *sql.Rows) (C5Purchase, error) {
 		&purchase.ID, &purchase.ItemID, &purchase.MarketHashName, &purchase.NameCN,
 		&purchase.OutTradeNo, &quotedPrice, &purchase.SteamPrice, &ratio,
 		&purchase.BudgetDay, &status, &actualPrice, &purchase.C5OrderID,
-		&purchase.LastError, &createdAt, &updatedAt,
+		&purchase.LastError, &createdAt, &updatedAt, &purchase.Kind,
 	)
 	if err != nil {
 		return C5Purchase{}, fmt.Errorf("scan C5 purchase: %w", err)
@@ -369,6 +382,9 @@ func validateBeginC5Purchase(params BeginC5PurchaseParams) error {
 	}
 	if err := validateBudgetDay(params.BudgetDay); err != nil {
 		return err
+	}
+	if params.Kind != C5PurchaseAuto && params.Kind != C5PurchaseManualTest {
+		return fmt.Errorf("C5 purchase kind is invalid")
 	}
 	if params.CreatedAt.IsZero() || params.CreatedAt.UTC().UnixMilli() < 0 {
 		return fmt.Errorf("C5 purchase creation time is invalid")

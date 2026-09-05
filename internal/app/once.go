@@ -53,7 +53,7 @@ func RunOneShot(
 		logPurchaseRunResult("C5 purchase phase complete", result.Purchases)
 	}
 	if purchaseErr == nil && result.Purchases.PlacedPurchase != nil {
-		if err := sendC5PurchaseReceipt(ctx, sender, *result.Purchases.PlacedPurchase); err != nil {
+		if err := SendC5PurchaseReceipt(ctx, sender, *result.Purchases.PlacedPurchase); err != nil {
 			return result, err
 		}
 		return result, nil

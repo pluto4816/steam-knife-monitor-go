@@ -19,6 +19,8 @@ type RunConfig struct {
 	RequestDelay     time.Duration
 	ErrorDelay       time.Duration
 
+	InitialFullScanCompletedAt time.Time
+
 	// Candidates is nil only for the frozen V1 scan tests. Production modes load
 	// a non-empty persisted catalog and therefore always use targeted details.
 	Candidates []catalog.Item
@@ -38,6 +40,11 @@ func Run(
 	}
 
 	var nextFullScanAttempt time.Time
+	resumePurchasePending := false
+	if !config.InitialFullScanCompletedAt.IsZero() {
+		nextFullScanAttempt = config.InitialFullScanCompletedAt.UTC().Add(config.FullScanInterval)
+		resumePurchasePending = true
+	}
 	var nextNotificationAttempt time.Time
 	var nextPurchaseAttempt time.Time
 	for {
@@ -45,7 +52,7 @@ func Run(
 			return nil
 		}
 
-		purchaseNeeded := false
+		purchaseNeeded := resumePurchasePending
 		if nextFullScanAttempt.IsZero() || !time.Now().UTC().Before(nextFullScanAttempt) {
 			result, err := runConfiguredScan(ctx, client, stateStore, config)
 			completedAt := time.Now().UTC()
@@ -119,6 +126,7 @@ func Run(
 			(purchaseNeeded || result.ProcessedCount > 0 || !nextPurchaseAttempt.IsZero()) &&
 			(nextPurchaseAttempt.IsZero() || !now.Before(nextPurchaseAttempt)) {
 			purchaseResult, err := config.Purchase.Run(ctx)
+			resumePurchasePending = false
 			completedAt := time.Now().UTC()
 			if err != nil {
 				if ctx.Err() != nil {
@@ -139,7 +147,7 @@ func Run(
 				logPurchaseRunResult("C5 purchase phase complete", purchaseResult)
 				nextPurchaseAttempt = time.Time{}
 				if purchaseResult.PlacedPurchase != nil {
-					if err := sendC5PurchaseReceipt(ctx, sender, *purchaseResult.PlacedPurchase); err != nil {
+					if err := SendC5PurchaseReceipt(ctx, sender, *purchaseResult.PlacedPurchase); err != nil {
 						return err
 					}
 					log.Printf("C5 purchase receipt sent; monitor stopping after first purchase")
@@ -210,6 +218,9 @@ func validateRunConfig(config RunConfig) error {
 	}
 	if config.RequestDelay < 0 {
 		return fmt.Errorf("request delay cannot be negative")
+	}
+	if !config.InitialFullScanCompletedAt.IsZero() && config.Candidates == nil {
+		return fmt.Errorf("initial full scan completion requires targeted candidates")
 	}
 	if config.Candidates != nil && len(config.Candidates) == 0 {
 		return fmt.Errorf("candidate catalog cannot be empty")

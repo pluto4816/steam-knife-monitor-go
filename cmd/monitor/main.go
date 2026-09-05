@@ -33,6 +33,7 @@ const (
 	modeOnce             executionMode = "once"
 	modePreview          executionMode = "preview"
 	modeUpdateCandidates executionMode = "update-candidates"
+	modePurchaseTest     executionMode = "purchase-test"
 )
 
 type executionMode string
@@ -43,6 +44,7 @@ type commandConfig struct {
 	CandidatePath string
 	NotifyEmpty   bool
 	C5Purchase    app.C5PurchaseMode
+	C5ItemID      int64
 }
 
 var defaultRunConfig = app.RunConfig{
@@ -104,7 +106,7 @@ func run() error {
 	runtimeConfig := defaultRunConfig
 	runtimeConfig.Candidates = candidateCatalog.Items
 	var steamPrices app.SteamPriceSource
-	if config.C5Purchase != app.C5PurchaseOff {
+	if config.C5Purchase != app.C5PurchaseOff && config.Mode != modePurchaseTest {
 		steamPrices = collector.NewSteamPriceClient(steamCommunityBaseURL, httpClient)
 	}
 
@@ -127,9 +129,41 @@ func run() error {
 		}
 	}()
 
-	purchaseRunner, err := newC5PurchaseRunner(
-		config, smisClient, steamPrices, stateStore, candidateCatalog.Items, httpClient,
-	)
+	if config.Mode == modeMonitor {
+		resume, err := app.EvaluateTargetedScanResume(
+			ctx,
+			stateStore,
+			candidateCatalog.Items,
+			runtimeConfig.FullScanInterval,
+			time.Now().UTC(),
+		)
+		if err != nil {
+			return fmt.Errorf("evaluate targeted scan resume: %w", err)
+		}
+		if resume.Eligible {
+			runtimeConfig.InitialFullScanCompletedAt = resume.CompletedAt
+			log.Printf(
+				"initial full scan skipped: reason=%s completed_at=%s candidates=%d catalog_fingerprint=%s",
+				resume.Reason,
+				resume.CompletedAt.UTC().Format(time.RFC3339),
+				len(candidateCatalog.Items),
+				resume.CatalogFingerprint,
+			)
+		} else {
+			log.Printf("initial full scan required: reason=%s", resume.Reason)
+		}
+	}
+
+	var purchaseRunner app.PurchaseRunner
+	if config.Mode == modePurchaseTest {
+		purchaseRunner, err = newManualC5PurchaseTestRunner(
+			config, stateStore, candidateCatalog.Items, httpClient,
+		)
+	} else {
+		purchaseRunner, err = newC5PurchaseRunner(
+			config, smisClient, steamPrices, stateStore, candidateCatalog.Items, httpClient,
+		)
+	}
 	if err != nil {
 		return err
 	}
@@ -141,7 +175,14 @@ func run() error {
 		candidateCatalog.GeneratedAt.UTC().Format(time.RFC3339),
 		len(candidateCatalog.Items),
 	)
-	if config.C5Purchase != app.C5PurchaseOff {
+	if config.Mode == modePurchaseTest {
+		log.Printf(
+			"manual C5 purchase test configured: item_id=%d max_price=%s ledger_kind=%s",
+			config.C5ItemID,
+			app.C5PerOrderLimit,
+			store.C5PurchaseManualTest,
+		)
+	} else if config.C5Purchase != app.C5PurchaseOff {
 		log.Printf(
 			"C5 purchase configured: mode=%s steam_price_source=SteamCommunityMarket per_order_limit=%s daily_limit=%s timezone=Asia/Shanghai",
 			config.C5Purchase,
@@ -194,6 +235,30 @@ func run() error {
 			)
 		}
 		log.Printf("preview complete: fresh_state=true would_send=%d", len(alerts))
+	case modePurchaseTest:
+		log.Printf(
+			"manual C5 purchase test started: database=%s item_id=%d max_price=%s",
+			config.DBPath,
+			config.C5ItemID,
+			app.C5PerOrderLimit,
+		)
+		result, err := purchaseRunner.Run(ctx)
+		log.Printf(
+			"manual C5 purchase test summary: reconciled=%d confirmed=%d placed=%d",
+			result.ReconciledCount,
+			result.ConfirmedCount,
+			result.PlacedCount,
+		)
+		if err != nil {
+			return err
+		}
+		if result.PlacedPurchase == nil {
+			return fmt.Errorf("manual C5 purchase test completed without a placed purchase")
+		}
+		if err := app.SendC5PurchaseReceipt(ctx, sender, *result.PlacedPurchase); err != nil {
+			return err
+		}
+		log.Printf("manual C5 purchase test complete")
 	default:
 		return fmt.Errorf("unsupported mode %q", config.Mode)
 	}
@@ -210,12 +275,13 @@ func parseCommandConfig(args []string) (commandConfig, error) {
 	flags := flag.NewFlagSet("monitor", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	mode := string(config.Mode)
-	flags.StringVar(&mode, "mode", mode, "execution mode: monitor, once, preview, or update-candidates")
+	flags.StringVar(&mode, "mode", mode, "execution mode: monitor, once, preview, update-candidates, or purchase-test")
 	flags.StringVar(&config.DBPath, "db", config.DBPath, "SQLite database path")
 	flags.StringVar(&config.CandidatePath, "candidates", config.CandidatePath, "candidate catalog JSON path")
 	flags.BoolVar(&config.NotifyEmpty, "notify-empty", false, "send a QQ message after a successful one-time scan with no A-tier candidates")
 	c5Purchase := string(config.C5Purchase)
 	flags.StringVar(&c5Purchase, "c5-purchase", c5Purchase, "C5 purchase mode: off, dry-run, or live")
+	flags.Int64Var(&config.C5ItemID, "c5-item-id", 0, "catalog item ID for purchase-test mode")
 	if err := flags.Parse(args); err != nil {
 		return commandConfig{}, err
 	}
@@ -224,10 +290,10 @@ func parseCommandConfig(args []string) (commandConfig, error) {
 	}
 	config.Mode = executionMode(mode)
 	switch config.Mode {
-	case modeMonitor, modeOnce, modePreview, modeUpdateCandidates:
+	case modeMonitor, modeOnce, modePreview, modeUpdateCandidates, modePurchaseTest:
 	default:
 		return commandConfig{}, fmt.Errorf(
-			"invalid mode %q: want monitor, once, preview, or update-candidates",
+			"invalid mode %q: want monitor, once, preview, update-candidates, or purchase-test",
 			mode,
 		)
 	}
@@ -242,7 +308,17 @@ func parseCommandConfig(args []string) (commandConfig, error) {
 	}
 	if config.C5Purchase != app.C5PurchaseOff &&
 		(config.Mode == modePreview || config.Mode == modeUpdateCandidates) {
-		return commandConfig{}, fmt.Errorf("-c5-purchase requires -mode monitor or once")
+		return commandConfig{}, fmt.Errorf("-c5-purchase requires -mode monitor, once, or purchase-test")
+	}
+	if config.Mode == modePurchaseTest {
+		if config.C5Purchase != app.C5PurchaseLive {
+			return commandConfig{}, fmt.Errorf("-mode purchase-test requires -c5-purchase live")
+		}
+		if config.C5ItemID <= 0 {
+			return commandConfig{}, fmt.Errorf("-mode purchase-test requires a positive -c5-item-id")
+		}
+	} else if config.C5ItemID != 0 {
+		return commandConfig{}, fmt.Errorf("-c5-item-id requires -mode purchase-test")
 	}
 	if config.NotifyEmpty && config.Mode != modeOnce {
 		return commandConfig{}, fmt.Errorf("-notify-empty requires -mode once")
@@ -346,6 +422,46 @@ func newC5PurchaseRunner(
 	default:
 		return nil, fmt.Errorf("unsupported C5 purchase mode %q", config.C5Purchase)
 	}
+}
+
+func newManualC5PurchaseTestRunner(
+	config commandConfig,
+	stateStore *store.Store,
+	candidates []catalog.Item,
+	httpClient *http.Client,
+) (app.PurchaseRunner, error) {
+	var target catalog.Item
+	for _, candidate := range candidates {
+		if candidate.ItemID == config.C5ItemID {
+			target = candidate
+			break
+		}
+	}
+	if target.ItemID == 0 {
+		return nil, fmt.Errorf("manual C5 purchase test item %d is not in the candidate catalog", config.C5ItemID)
+	}
+	client, err := c5.NewClient(
+		c5BaseURL,
+		os.Getenv("C5_APP_KEY"),
+		os.Getenv("C5_TRADE_URL"),
+		httpClient,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"configure manual C5 purchase test from C5_APP_KEY and C5_TRADE_URL: %w",
+			err,
+		)
+	}
+	runner, err := app.NewManualC5PurchaseTestService(
+		stateStore,
+		client,
+		target,
+		app.C5PerOrderLimit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("configure manual C5 purchase test service: %w", err)
+	}
+	return runner, nil
 }
 
 func newQQSenderFromEnv(httpClient *http.Client) (*app.QQBotSender, error) {

@@ -57,13 +57,22 @@ saved. A retry may resume only when the checkpoint matches the exact ordered can
 catalog changes invalidate old progress. An incomplete scan must still perform no due-check or
 notification phase.
 
+A successful targeted full scan also persists its catalog fingerprint, candidate count, and
+completion time. On `monitor` restart only, the initial full scan may be skipped when that
+durable completion is less than 24 hours old, its fingerprint and count match the exact current
+catalog, every catalog identity has exactly one persisted state, and no checkpoint exists.
+The next 24-hour full scan remains anchored to the persisted completion time. A failed check
+must perform the normal full scan; `once` and `preview` never use this restart shortcut.
+
 ## C5 purchase price-confirmation flow
 
 The payment path is fixed and must remain in this order:
 
 ```text
-SMIS scans the 426 persisted candidates
-→ use SMIS transaction volume and SMIS prices for preliminary classification
+SMIS scans the 426 persisted candidates, or a restarting monitor verifies the durable recent
+  full-scan completion and all 426 persisted identities
+→ run due checks using SMIS and use SMIS transaction volume and prices for preliminary
+  classification
 → obtain current A-tier candidates
 → in the purchase phase, refresh SMIS detail and require C5 to be the lowest positive platform
 → require the exact C5 price to be no greater than CNY 1.00
@@ -85,6 +94,21 @@ no C5 balance query, ledger mutation, or quick-buy.
 Steam price failure, absence, invalid currency, restriction, or a recomputed non-A result must
 prevent purchase. Steam transaction volume remains a smis.club screening input and is never a
 payment amount. Do not restore global Steam Community Market search or pagination.
+
+## Manual specified-item purchase test
+
+The explicit `purchase-test` mode is a narrow exception to the automatic price-confirmation
+flow above. It selects exactly one existing catalog item by `item_id`, runs once, and exits.
+It does not call SMIS or Steam, does not require persisted SMIS identity or tier state, and does
+not compare C5 with other platforms. Its sole market-price eligibility rule is a C5 quick-buy
+`maxPrice` fixed at CNY 1.00; a successful `actualPay` must also be positive and no greater than
+that ceiling.
+
+This mode is live-only and must retain the C5 balance check, CNY 1.00 per-order ceiling, CNY
+10.00 daily budget, durable per-item reservation, unique `outTradeNo`, unresolved-order
+reconciliation, and no automatic resubmission after ambiguity. Ledger rows use
+`purchase_kind=MANUAL_TEST`. It must not change the behavior of `monitor`, `once`, dry-run,
+scans, due checks, or automatic C5 purchasing.
 
 ## Development phases
 
