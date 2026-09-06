@@ -133,7 +133,7 @@ func Run(
 					return nil
 				}
 				log.Printf(
-					"C5 purchase phase error: reconciled=%d confirmed=%d excluded=%d dry_run=%d placed=%d rejected=%d: %v",
+					"purchase phase error: reconciled=%d confirmed=%d excluded=%d dry_run=%d placed=%d rejected=%d: %v",
 					purchaseResult.ReconciledCount,
 					purchaseResult.ConfirmedCount,
 					purchaseResult.ExcludedCount,
@@ -144,13 +144,13 @@ func Run(
 				)
 				nextPurchaseAttempt = completedAt.Add(config.ErrorDelay)
 			} else {
-				logPurchaseRunResult("C5 purchase phase complete", purchaseResult)
+				logPurchaseRunResult("purchase phase complete", purchaseResult)
 				nextPurchaseAttempt = time.Time{}
-				if purchaseResult.PlacedPurchase != nil {
-					if err := SendC5PurchaseReceipt(ctx, sender, *purchaseResult.PlacedPurchase); err != nil {
+				if purchaseResult.PlacedPurchase != nil || purchaseResult.ECOPlacedPurchase != nil {
+					if err := sendPurchaseResult(ctx, sender, purchaseResult); err != nil {
 						return err
 					}
-					log.Printf("C5 purchase receipt sent; monitor stopping after first purchase")
+					log.Printf("purchase receipt sent; monitor stopping after first purchase")
 					return nil
 				}
 			}

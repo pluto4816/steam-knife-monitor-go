@@ -7,6 +7,85 @@ Go V1 is frozen at tag `v1.0.0`. V2.1 and V2.2 are complete. V2.3 Phase 1 adds a
 explicitly enabled, single-platform C5GAME purchase phase with durable safety controls. Normal
 operation remains unchanged unless C5 purchasing is selected.
 
+C5 live testing is currently suspended because the user's API account cannot obtain purchase
+permission. The active alternative is ECO, with manual and automatic modes described below.
+
+## ECO automatic purchasing
+
+The ECO manual purchase has succeeded. `monitor` and `once` now support
+`-eco-purchase off|dry-run|live` (default off). Only one purchase platform can be enabled;
+leave `-c5-purchase off` when using ECO. Other modes reject automatic ECO purchasing.
+
+After the usual complete scan and successful due checks, the program selects current A-tier
+items, refreshes SMIS and requires ECO-lowest with price <= CNY 1.00. It checks ECO's official
+quote for that exact name, excludes increased prices/no stock, and only then checks Steam's
+CNY lowest price and the base A rule. Scan/tier state remains based on SMIS.
+
+Use the ECO credential environment variables documented below and the existing QQ variables.
+Unlike C5 dry-run, ECO dry-run needs credentials for its signed official quote query.
+
+```bash
+# Test confirmation decisions. The ordinary scan and QQ phase still run.
+go run ./cmd/monitor -mode once -eco-purchase dry-run \
+  -db ./steam-knife-monitor.db -candidates ./steam-candidates.json
+
+# Enable live purchasing in the existing monitor.
+go run ./cmd/monitor -mode monitor -eco-purchase live \
+  -db ./steam-knife-monitor.db -candidates ./steam-candidates.json
+```
+
+Dry-run performs no ECO balance check, purchase submission or purchase-ledger mutation. Live
+reserves the exact confirmed quote (at most CNY 1.00) before submitting one order. The daily
+CNY 10.00 cap includes ECO reserved ceilings and existing C5 committed/unresolved amounts.
+The previous manual P250 purchase remains excluded after schema migration. An item is never
+automatically purchased again, including on a later date or after cancellation.
+
+Ambiguous submissions and orders awaiting their first valid detail query block new purchases;
+later runs query the original merchant number without resubmitting. A successful purchase
+sends an ECO order-created QQ receipt and **stops the current run after the first success**,
+preserving the existing runtime behavior. Steam trade acceptance remains manual.
+
+## ECO: one P250 Re.built Field-Tested purchase test
+
+ECO API and purchase permission must already be enabled. This explicit mode buys at most one
+`P250 | Re.built (Field-Tested)` (`P250 | 重构 (久经沙场)`), with a server-side maximum of
+CNY 1.00, then queries the order once and exits. It needs no candidate catalog or QQ credentials.
+It does not run scans, contact SMIS/Steam/C5/QQ, or enable automatic ECO buying in the monitor.
+
+Supply credentials through the environment. Store the RSA private key matching the public key
+registered with ECO in a local protected file, outside version control; do not paste it into
+chat, code, command arguments, or logs. The key file may contain PKCS#1/PKCS#8 PEM or base64 DER.
+
+```bash
+read -rsp 'ECO identity ID: ' ECO_PARTNER_ID
+printf '\n'
+export ECO_PARTNER_ID
+export ECO_PRIVATE_KEY_FILE='/absolute/path/to/your/eco-private.pem'
+read -rsp 'Steam receiving trade URL: ' ECO_TRADE_URL
+printf '\n'
+export ECO_TRADE_URL
+go run ./cmd/monitor -mode eco-purchase-test -db ./steam-knife-monitor.db
+```
+
+The mode checks balance, reserves CNY 1.00 and a unique merchant number in SQLite, and submits
+one request. The CNY 10.00 daily budget uses Asia/Shanghai and includes existing C5 spending
+and unresolved reservations in the same database. Continue using the same persistent database
+and the project's single-process model, with C5 live work suspended.
+
+**Running the command again only queries the original order.** It does not buy another item,
+even after cancellation or a later calendar day. Never delete/change the database to retry an
+uncertain order. A failed, restricted, empty, malformed, over-budget or ambiguous response stops
+the command. No internal purchase retry occurs.
+
+`PLACED` means an order was created. The log reports ECO's order-state code separately; it does
+not claim the item has arrived in Steam. Check ECO/Steam for delivery and accept the correct
+trade manually. This phase performs no Steam login, Guard action or automatic acceptance.
+
+Official references: [setup](https://s.apifox.cn/8dd30eef-e628-4390-b503-846412c608ee/doc-5242862),
+[signing](https://s.apifox.cn/8dd30eef-e628-4390-b503-846412c608ee/doc-5242863),
+[purchase](https://s.apifox.cn/8dd30eef-e628-4390-b503-846412c608ee/api-220956656),
+[order query](https://s.apifox.cn/8dd30eef-e628-4390-b503-846412c608ee/api-220956661).
+
 ## Candidate catalog
 
 The monitor now requires a local candidate catalog. Generate or refresh it manually:

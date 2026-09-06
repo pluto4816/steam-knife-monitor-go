@@ -129,3 +129,15 @@ func formatRatio(ratio core.RatioBP) string {
 	formatted := fmt.Sprintf("%d.%04d", value/10000, value%10000)
 	return strings.TrimRight(strings.TrimRight(formatted, "0"), ".")
 }
+
+// One selected payment platform shares the existing runtime receipt boundary.
+func sendPurchaseResult(ctx context.Context, sender Sender, result PurchaseRunResult) error {
+	if result.ECOPlacedPurchase == nil {
+		return SendC5PurchaseReceipt(ctx, sender, *result.PlacedPurchase)
+	}
+	if sender == nil {
+		return fmt.Errorf("sender cannot be nil")
+	}
+	r := result.ECOPlacedPurchase
+	return sender.Send(ctx, store.Alert{Message: fmt.Sprintf("ECO下单成功（待收货）\n名称：%s\n购买价格：%s\nsteam价格：%s\n折扣：%s\n订单号：%s", r.NameCN, r.Price, r.SteamPrice, formatRatio(r.Ratio), r.OrderNo)})
+}

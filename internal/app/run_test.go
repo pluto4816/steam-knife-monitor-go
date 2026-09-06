@@ -161,21 +161,38 @@ func TestRunFullScanErrorStillProcessesDueItem(t *testing.T) {
 }
 
 func TestRunFullScanFailureUsesErrorDelay(t *testing.T) {
+	stateStore := openTestStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	attempts := 0
 	client, requests := runtimeTestClient(t, func(method, path string, page int) (int, string) {
+		if path == "/api/commodity/search" {
+			attempts++
+			if attempts == 3 {
+				cancel()
+			}
+		}
 		return http.StatusInternalServerError, "{}"
 	})
 	config := runtimeTestConfig()
 	config.DuePollInterval = 4 * time.Millisecond
 	config.ErrorDelay = 40 * time.Millisecond
-	ctx, cancel := context.WithTimeout(context.Background(), 115*time.Millisecond)
-	defer cancel()
-
-	if err := Run(ctx, client, openTestStore(t), config, nil); err != nil {
+	if err := Run(ctx, client, stateStore, config, nil); err != nil {
 		t.Fatal(err)
 	}
-	count := requests.countPath("/api/commodity/search")
-	if count < 2 || count > 4 {
-		t.Fatalf("full scan requests = %d, want 2..4 with error delay", count)
+	var times []time.Time
+	for _, request := range requests.snapshot() {
+		if request.Path == "/api/commodity/search" {
+			times = append(times, request.At)
+		}
+	}
+	if len(times) != 3 {
+		t.Fatalf("full scan requests=%d, want 3", len(times))
+	}
+	for i := 1; i < len(times); i++ {
+		if elapsed := times[i].Sub(times[i-1]); elapsed < config.ErrorDelay {
+			t.Fatalf("retry after %s, want at least %s", elapsed, config.ErrorDelay)
+		}
 	}
 }
 

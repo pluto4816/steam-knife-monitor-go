@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -34,6 +35,7 @@ const (
 	modePreview          executionMode = "preview"
 	modeUpdateCandidates executionMode = "update-candidates"
 	modePurchaseTest     executionMode = "purchase-test"
+	modeECOTest          executionMode = "eco-purchase-test"
 )
 
 type executionMode string
@@ -45,6 +47,7 @@ type commandConfig struct {
 	NotifyEmpty   bool
 	C5Purchase    app.C5PurchaseMode
 	C5ItemID      int64
+	ECOPurchase   app.ECOPurchaseMode
 }
 
 var defaultRunConfig = app.RunConfig{
@@ -72,6 +75,9 @@ func run() error {
 	defer stop()
 
 	httpClient := &http.Client{Timeout: httpTimeout}
+	if config.Mode == modeECOTest {
+		return runECOTest(ctx, config, httpClient)
+	}
 	smisClient := collector.NewSMISClient(smisBaseURL, httpClient)
 	if config.Mode == modeUpdateCandidates {
 		log.Printf("candidate update started: catalog=%s", config.CandidatePath)
@@ -106,7 +112,7 @@ func run() error {
 	runtimeConfig := defaultRunConfig
 	runtimeConfig.Candidates = candidateCatalog.Items
 	var steamPrices app.SteamPriceSource
-	if config.C5Purchase != app.C5PurchaseOff && config.Mode != modePurchaseTest {
+	if (config.C5Purchase != app.C5PurchaseOff || config.ECOPurchase != app.ECOPurchaseOff) && config.Mode != modePurchaseTest {
 		steamPrices = collector.NewSteamPriceClient(steamCommunityBaseURL, httpClient)
 	}
 
@@ -159,6 +165,8 @@ func run() error {
 		purchaseRunner, err = newManualC5PurchaseTestRunner(
 			config, stateStore, candidateCatalog.Items, httpClient,
 		)
+	} else if config.ECOPurchase != app.ECOPurchaseOff {
+		purchaseRunner, err = newECOPurchaseRunner(config, smisClient, steamPrices, stateStore, candidateCatalog.Items, httpClient)
 	} else {
 		purchaseRunner, err = newC5PurchaseRunner(
 			config, smisClient, steamPrices, stateStore, candidateCatalog.Items, httpClient,
@@ -168,6 +176,9 @@ func run() error {
 		return err
 	}
 	runtimeConfig.Purchase = purchaseRunner
+	if config.ECOPurchase != app.ECOPurchaseOff {
+		log.Printf("ECO purchase configured: mode=%s per_order_limit=1.00 daily_limit=10.00 timezone=Asia/Shanghai", config.ECOPurchase)
+	}
 
 	log.Printf(
 		"candidate catalog loaded: path=%s generated_at=%s candidates=%d",
@@ -271,14 +282,17 @@ func parseCommandConfig(args []string) (commandConfig, error) {
 		DBPath:        defaultDBPath,
 		CandidatePath: defaultCatalogPath,
 		C5Purchase:    app.C5PurchaseOff,
+		ECOPurchase:   app.ECOPurchaseOff,
 	}
 	flags := flag.NewFlagSet("monitor", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	mode := string(config.Mode)
-	flags.StringVar(&mode, "mode", mode, "execution mode: monitor, once, preview, update-candidates, or purchase-test")
+	flags.StringVar(&mode, "mode", mode, "execution mode: monitor, once, preview, update-candidates, purchase-test, or eco-purchase-test")
 	flags.StringVar(&config.DBPath, "db", config.DBPath, "SQLite database path")
 	flags.StringVar(&config.CandidatePath, "candidates", config.CandidatePath, "candidate catalog JSON path")
 	flags.BoolVar(&config.NotifyEmpty, "notify-empty", false, "send a QQ message after a successful one-time scan with no A-tier candidates")
+	ecoPurchase := string(config.ECOPurchase)
+	flags.StringVar(&ecoPurchase, "eco-purchase", ecoPurchase, "ECO purchase mode: off, dry-run, or live")
 	c5Purchase := string(config.C5Purchase)
 	flags.StringVar(&c5Purchase, "c5-purchase", c5Purchase, "C5 purchase mode: off, dry-run, or live")
 	flags.Int64Var(&config.C5ItemID, "c5-item-id", 0, "catalog item ID for purchase-test mode")
@@ -290,14 +304,32 @@ func parseCommandConfig(args []string) (commandConfig, error) {
 	}
 	config.Mode = executionMode(mode)
 	switch config.Mode {
-	case modeMonitor, modeOnce, modePreview, modeUpdateCandidates, modePurchaseTest:
+	case modeMonitor, modeOnce, modePreview, modeUpdateCandidates, modePurchaseTest, modeECOTest:
 	default:
 		return commandConfig{}, fmt.Errorf(
-			"invalid mode %q: want monitor, once, preview, update-candidates, or purchase-test",
+			"invalid mode %q: want monitor, once, preview, update-candidates, purchase-test, or eco-purchase-test",
 			mode,
 		)
 	}
 	config.C5Purchase = app.C5PurchaseMode(c5Purchase)
+	config.ECOPurchase = app.ECOPurchaseMode(ecoPurchase)
+	if config.ECOPurchase != app.ECOPurchaseOff && config.ECOPurchase != app.ECOPurchaseDryRun && config.ECOPurchase != app.ECOPurchaseLive {
+		return commandConfig{}, fmt.Errorf("invalid ECO purchase mode")
+	}
+	if config.ECOPurchase != app.ECOPurchaseOff {
+		if config.Mode != modeMonitor && config.Mode != modeOnce {
+			return commandConfig{}, fmt.Errorf("-eco-purchase requires -mode monitor or once")
+		}
+		if config.C5Purchase != app.C5PurchaseOff {
+			return commandConfig{}, fmt.Errorf("only one purchase platform may be enabled")
+		}
+		if config.DBPath == "" || strings.ContainsAny(config.DBPath, ":?\x00") {
+			return commandConfig{}, fmt.Errorf("ECO requires a durable SQLite file path")
+		}
+	}
+	if config.Mode == modeECOTest && config.C5Purchase != app.C5PurchaseOff {
+		return commandConfig{}, fmt.Errorf("eco-purchase-test requires -c5-purchase off")
+	}
 	switch config.C5Purchase {
 	case app.C5PurchaseOff, app.C5PurchaseDryRun, app.C5PurchaseLive:
 	default:
@@ -327,7 +359,7 @@ func parseCommandConfig(args []string) (commandConfig, error) {
 }
 
 func senderForMode(mode executionMode, httpClient *http.Client) (app.Sender, error) {
-	if mode == modePreview || mode == modeUpdateCandidates {
+	if mode == modePreview || mode == modeUpdateCandidates || mode == modeECOTest {
 		return nil, nil
 	}
 	return newQQSenderFromEnv(httpClient)
@@ -353,7 +385,7 @@ func logCandidateUpdateSummary(result app.CandidateUpdateResult) {
 
 func logOneShotSummary(label string, result app.OneShotResult) {
 	log.Printf(
-		"%s summary: candidates=%d resumed=%d matched=%d processed=%d duplicates=%d due=%d due_processed=%d tiers=A:%d,B1:%d,B2:%d,B3:%d,C:%d c5_reconciled=%d c5_confirmed=%d c5_excluded=%d c5_dry_run=%d c5_placed=%d c5_rejected=%d notifications_pending=%d notifications_sent=%d",
+		"%s summary: candidates=%d resumed=%d matched=%d processed=%d duplicates=%d due=%d due_processed=%d tiers=A:%d,B1:%d,B2:%d,B3:%d,C:%d purchase_reconciled=%d purchase_confirmed=%d purchase_excluded=%d purchase_dry_run=%d purchase_placed=%d purchase_rejected=%d notifications_pending=%d notifications_sent=%d",
 		label,
 		result.Scan.CandidateCount,
 		result.Scan.ResumedCount,

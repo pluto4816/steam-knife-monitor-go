@@ -50,10 +50,10 @@ func RunOneShot(
 	var purchaseErr error
 	if config.Purchase != nil {
 		result.Purchases, purchaseErr = config.Purchase.Run(ctx)
-		logPurchaseRunResult("C5 purchase phase complete", result.Purchases)
+		logPurchaseRunResult("purchase phase complete", result.Purchases)
 	}
-	if purchaseErr == nil && result.Purchases.PlacedPurchase != nil {
-		if err := SendC5PurchaseReceipt(ctx, sender, *result.Purchases.PlacedPurchase); err != nil {
+	if purchaseErr == nil && (result.Purchases.PlacedPurchase != nil || result.Purchases.ECOPlacedPurchase != nil) {
+		if err := sendPurchaseResult(ctx, sender, result.Purchases); err != nil {
 			return result, err
 		}
 		return result, nil
@@ -72,7 +72,7 @@ func RunOneShot(
 		result.Notifications.PendingCount = len(alerts)
 	}
 	if purchaseErr != nil {
-		return result, fmt.Errorf("C5 purchase phase: %w", purchaseErr)
+		return result, fmt.Errorf("purchase phase: %w", purchaseErr)
 	}
 	return result, nil
 }

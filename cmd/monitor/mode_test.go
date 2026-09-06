@@ -13,7 +13,7 @@ func TestParseCommandConfigDefaultsToMonitor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config != (commandConfig{Mode: modeMonitor, DBPath: defaultDBPath, CandidatePath: defaultCatalogPath, C5Purchase: app.C5PurchaseOff}) {
+	if config != (commandConfig{Mode: modeMonitor, DBPath: defaultDBPath, CandidatePath: defaultCatalogPath, C5Purchase: app.C5PurchaseOff, ECOPurchase: app.ECOPurchaseOff}) {
 		t.Fatalf("config = %#v", config)
 	}
 }

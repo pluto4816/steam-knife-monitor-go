@@ -10,3 +10,6 @@
 /steam-knife-monitor.db-shm
 /steam-knife-monitor.db-wal
 /steam-candidates.json
+
+# Local ECO credentials (never commit private key material).
+/.eco/

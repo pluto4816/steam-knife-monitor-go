@@ -112,6 +112,15 @@ scans, due checks, or automatic C5 purchasing.
 
 ## Development phases
 
+The ECO single-item manual test succeeded on 2026-09-06 and the user then explicitly started
+automatic ECO purchasing. Follow the ECO sections in GO_V2_SPEC.md for the three payment
+endpoints and the official single-name BatchSearchSellingPrice quote endpoint, credential
+handling, CNY 1.00 order ceiling, CNY 10.00 daily limit, and durable no-resubmission behavior.
+This exception allows `-eco-purchase dry-run|live` only in monitor/once and preserves the manual
+`eco-purchase-test`. Ordinary scans and due checks still use only SMIS. Steam is called only
+after the ECO purchase prefilter and official quote validation. C5 live testing is suspended;
+ECO and C5 purchasing are mutually exclusive. Do not build a multi-platform framework.
+
 Go V1 is frozen at tag `v1.0.0`. Go Core, Collector, SQLite, Scan Cycle, Detail Market Fetch,
 Tier Scheduler, the long-running runtime, Notification Phase 1, and the QQ official sender are
 complete.

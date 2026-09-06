@@ -28,13 +28,14 @@ const (
 )
 
 type PurchaseRunResult struct {
-	ReconciledCount int
-	ConfirmedCount  int
-	ExcludedCount   int
-	DryRunCount     int
-	PlacedCount     int
-	RejectedCount   int
-	PlacedPurchase  *C5PurchaseReceipt
+	ReconciledCount   int
+	ConfirmedCount    int
+	ExcludedCount     int
+	DryRunCount       int
+	PlacedCount       int
+	RejectedCount     int
+	PlacedPurchase    *C5PurchaseReceipt
+	ECOPlacedPurchase *ECOPurchaseReceipt
 }
 
 type C5PurchaseReceipt struct {

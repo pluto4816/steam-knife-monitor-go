@@ -239,6 +239,10 @@ Add an explicitly enabled C5GAME purchase phase while preserving behavior when i
 preserving the V2.2 scan-completeness boundary. This phase supports only C5GAME's documented
 OpenAPI and only the current single user. Other platforms remain out of scope.
 
+The C5 integration is retained but live testing is suspended because the user reports that
+their C5 API account cannot obtain purchase permission. The explicitly authorized ECO manual
+test and automatic ECO phase below are the current platform scope.
+
 The purchase mode is `off`, `dry-run`, or `live`, selected with `-c5-purchase`. It defaults to
 `off`. `monitor` and `once` accept all three values. `preview` and `update-candidates` require
 `off`. Live mode reads `C5_APP_KEY` and `C5_TRADE_URL` from the environment; neither value may be
@@ -371,3 +375,144 @@ response must report a positive `actualPay` no greater than CNY 1.00. Its ledger
 - An ambiguous submission is never retried with a new order number.
 - Restart reconciliation uses the original `outTradeNo` before any new purchase.
 - `gofmt`, `go test ./...`, and `go vet ./...` pass.
+
+## ECO manual single-item purchase test (started 2026-09-06)
+
+The user has obtained ECO API and purchase permissions and authorized one live attempt for
+`P250 | Re.built (Field-Tested)` / `P250 | 重构 (久经沙场)`.
+
+`-mode eco-purchase-test` is an isolated mode of the same executable. It requires C5 purchasing
+off, does not require the local candidate catalog, and performs no SMIS, Steam, C5, QQ,
+candidate collection, tier processing, or ordinary monitor work. The target identity is fixed;
+this phase adds no general platform routing or automatic ECO purchase phase.
+
+Credentials are `ECO_PARTNER_ID`, `ECO_PRIVATE_KEY_FILE` (matching the public key registered
+with ECO), and `ECO_TRADE_URL`. Identity, private key, trade-link token, signatures, raw request
+bodies, and raw upstream error messages must never be committed or logged. RSA keys of at least
+2048 bits in PKCS#1/PKCS#8 PEM or base64 DER are supported. Production uses HTTPS on the fixed
+official host, refuses redirects, and makes sequential requests with a one-second gap and no
+internal retry.
+
+Only these official ECO endpoints are allowed in this phase:
+
+- `POST https://openapi.ecosteam.cn/Api/Merchant/GetTotalMoney`
+  ([wallet](https://s.apifox.cn/8dd30eef-e628-4390-b503-846412c608ee/api-220956645));
+- `POST https://openapi.ecosteam.cn/Api/open/buy/BuyByHashName`
+  ([purchase](https://s.apifox.cn/8dd30eef-e628-4390-b503-846412c608ee/api-220956656));
+- `POST https://openapi.ecosteam.cn/Api/open/order/OrderDetailsInfo`
+  ([order](https://s.apifox.cn/8dd30eef-e628-4390-b503-846412c608ee/api-220956661)).
+
+The [official signing example](https://s.apifox.cn/8dd30eef-e628-4390-b503-846412c608ee/doc-5242863)
+sorts top-level names case-insensitively and signs the unescaped `key=value&...` string with
+SHA256withRSA (PKCS#1 v1.5), base64-encoded. Requests include PartnerId and a Unix-seconds
+Timestamp. [Common responses](https://s.apifox.cn/8dd30eef-e628-4390-b503-846412c608ee/doc-5242864)
+use ResultCode 0 for success; both string and integer representations are documented. Missing,
+null, malformed, restricted, nonzero, empty or oversized responses stop the attempt.
+
+The purchase sends GameId `730`, the exact HashName, numeric Price `1` (CNY 1.00) and MaxCount `1`,
+the user's TradeLink and a durable unique MerchantNo. Optional IsFirst (express delivery),
+StyleName and service-provider fields are omitted. Price is documented as the maximum purchase
+budget. Monetary JSON tokens are parsed exactly into integer fen without float64 arithmetic.
+The integer price token avoids trailing-zero normalization differences in signing.
+
+Before submitting, conservatively require wallet Money minus LockMoney >= CNY 1.00. In SQLite,
+reserve the item, full CNY 1.00 and merchant number atomically as SUBMITTING with
+purchase_kind=MANUAL_TEST. The Asia/Shanghai daily limit is CNY 10.00, including existing C5
+committed/unresolved amounts in that same database. Keep the entire ECO ceiling reserved even
+after success; the one-item test permits no second purchase. Use the same persistent database
+on every invocation, with the existing one-process/one-user operating constraint and C5 live
+work suspended. In-memory and SQLite URI paths are rejected.
+
+A purchase response must contain exactly one order, matching MerchantNo, a positive order
+number, a positive PaymentPrice <= CNY 1.00, and no duplicate-order ID list. Persist PLACED
+before the final detail query. Every submission ambiguity becomes UNCERTAIN, or remains
+SUBMITTING if persistence fails. All existing ECO rows prevent another purchase, including
+after cancellation or on a later calendar day.
+
+On subsequent invocations, only query the original MerchantNo and exit. The official detail
+schema permits OrderNum or MerchantNo. A missing order never clears a reservation. Validated
+detail requires matching MerchantNo and HashName, the same order number when already known,
+an explicit order-state code, and positive TotalMoney with TotalMoney plus BuyerFee <= CNY 1.00
+(conservative until actual fee representation is verified). Record platform order state
+separately; PLACED means order creation, never proof of Steam receipt or completed settlement.
+No recharge, withdrawal, Steam login/Guard operation, automatic trade acceptance, callback
+server, WebSocket, or QQ receipt is added.
+
+Acceptance: signature and exact request checks; malformed/nonzero/over-ceiling/multi-order
+response rejection; no redirects or retries; durable reservation before payment; cancellation
+and restart recovery; insufficient balance and daily-budget refusal; repeated invocation only
+queries; isolated command routing; `gofmt`, `go test ./...`, and `go vet ./...`.
+
+## ECO automatic purchase phase (started 2026-09-06)
+
+The manual test successfully placed a CNY 0.45 order and the user confirmed receipt. The user
+then explicitly authorized integrating automatic ECO buying with the existing limits and
+duplicate-prevention controls. This section extends the manual-only boundary above. C5 live
+work remains suspended; do not introduce a platform framework.
+
+`-eco-purchase off|dry-run|live` defaults to off. Only `monitor` and `once` accept dry-run/live.
+ECO and C5 purchasing cannot be enabled together. `preview`, `update-candidates`, C5
+`purchase-test` and `eco-purchase-test` do not accept automatic ECO purchasing. Automatic ECO
+uses the existing durable database, catalog, scheduler and QQ sender; it requires a durable
+file path. Off makes no ECO requests and performs no ECO schema migration.
+
+Automatic ECO uses the three endpoints above plus one verified official price endpoint:
+`POST https://openapi.ecosteam.cn/Api/Market/BatchSearchSellingPrice`
+([documentation](https://s.apifox.cn/8dd30eef-e628-4390-b503-846412c608ee/api-220956651)).
+Send GameID `730` and a one-element HashName array for the exact candidate. Require exactly one
+matching response, a valid integer SellCount, and positive exact MinPrice when stock exists.
+Zero stock excludes the item. Missing, malformed or restricted quotes stop the phase. This
+endpoint is a purchase-phase input only; no ECO catalog crawl or listing pagination is added.
+The array is serialized as compact JSON for signing, following the official example. A real
+read-only query verified this endpoint/signature/response and returned CNY 0.47 for the test
+P250 during implementation; this quote is not a future purchase authorization or cached price.
+
+The fixed decision order is:
+
+1. Complete the targeted scan (or verify the durable recent monitor restart receipt) and
+   successfully run due checks using SMIS only, as before.
+2. In live mode reconcile all ECO SUBMITTING/UNCERTAIN rows and PLACED rows whose detail has
+   never been verified, using each original MerchantNo, identity and reserved ceiling. Any
+   unresolved/not-found/error blocks new purchases. A reconciliation cycle submits nothing.
+3. Select persisted current A-tier catalog identities. Exclude handled items, unresolved
+   orders and exhausted budgets before market requests. Both numeric ID and exact hash name
+   prevent ECO repeats; previous manual purchases remain handled by hash name. Existing C5
+   purchases of the same identity and all unresolved C5 submissions also block purchasing.
+4. Refresh the exact SMIS item. Require matching identity, ECO as the lowest positive platform
+   under the existing tie order, and an exact positive ECO price <= CNY 1.00.
+5. Query ECO's official price. Require a positive quote no greater than the SMIS ceiling.
+   An increase or no stock excludes the candidate before any Steam request. Check the daily
+   budget against this quote before Steam access.
+6. Query the existing Steam Community Market CNY lowest-price source once. Recompute RatioBP
+   using the official ECO quote and Steam price; require base A without hysteresis and use
+   only SMIS transaction volume. Do not persist these confirmation prices into tier state.
+7. Dry-run logs its decision and stops here. It requires ECO credentials for signed quote
+   reads, but never queries balance, creates/migrates/mutates ECO ledger data or submits.
+   The surrounding `once`/`monitor` still has its ordinary SQLite and QQ effects.
+8. Live checks ECO available balance, then atomically reserves exactly the confirmed quote,
+   item, original merchant number, and AUTO evidence before submitting one BuyByHashName with
+   MaxCount=1 and that exact numeric price ceiling. The ceiling can never exceed CNY 1.00.
+9. Validate the result, persist PLACED and query the original order once. Until valid matching
+   detail is saved, no later new purchase is allowed. Send the QQ ECO order-created receipt
+   after successful verification, preserving the existing stop-after-first-success runtime
+   behavior. This is not an assertion of Steam receipt. No automatic offer acceptance is added.
+
+The Asia/Shanghai daily cap stays CNY 10.00. Conservatively keep all ECO reserved ceilings
+counted for their reservation day, even after payment or cancellation, plus existing C5
+committed/unresolved amounts in the same database. Determine the reservation day immediately
+before payment, not at the start of a long scan. Every ECO identity is reserved at most once
+across dates, including failures/cancellation; no automatic resubmission or reservation release.
+All requests remain sequential with the configured one-second production gap and no internal
+retry. The monitor retains its existing five-minute error backoff.
+
+Migrate the old manual ECO table transactionally, preserving every original row and its ID,
+merchant number, order number, reserved/paid amounts and state. Add AUTO as a permitted kind
+and item ID, display name and confirmed Steam price as purchase evidence. Keep unique hash
+names and add a unique index for positive item IDs. An interrupted migration cannot discard
+the successful manual order. Dry-run reads the legacy manual schema without migrating it.
+
+Acceptance includes the full decision order; non-A/price/identity/stock/Steam failure guards;
+no payment inputs in scans or due checks; no purchase after incomplete scans or failed due
+checks; dry-run without payment writes; old manual order preservation and repeat exclusion;
+transactional budget and item checks; submission ambiguity and restart reconciliation; exact
+quote ceiling/signature tests; and successful existing regression tests, gofmt and go vet.
