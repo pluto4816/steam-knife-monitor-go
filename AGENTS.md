@@ -44,8 +44,9 @@ responses, 401, 403, 429, challenges, and similar restrictions.
 The ByMykel snapshot collector runs only in explicit `update-candidates` mode. Normal modes read
 the persisted catalog, make no ByMykel requests, and make no Steam Community Market requests
 during targeted full scans or due checks. They must not paginate the global smis.club exchange
-endpoint. They fetch only verified smis.club single-item details for catalog IDs. The sole Steam
-Community Market exception is the final C5 purchase-confirmation path described below;
+endpoint. They fetch only verified smis.club single-item details for catalog IDs. The only Steam
+Community Market exceptions are automatic C5 purchase confirmation below and automatic ECO
+purchase confirmation as specified in GO_V2_SPEC.md;
 `/market/priceoverview/` must never be used for candidate collection, global scanning, ordinary
 tier persistence, or due-check processing.
 
@@ -111,6 +112,13 @@ reconciliation, and no automatic resubmission after ambiguity. Ledger rows use
 scans, due checks, or automatic C5 purchasing.
 
 ## Development phases
+
+The final purchase product has automatic and manual channels for each of BUFF, 悠悠有品,
+C5, IGXE, and ECO, as specified in GO_V2_SPEC.md. ECO is the current example for both channels;
+its manual command still targets the fixed P250 test item. This target does not start new
+purchasing work for the other four platforms or a general manual item selector. Preserve
+existing C5 code and current platform mutual exclusion; do not infer authorization for new
+endpoints or a multi-platform framework.
 
 The ECO single-item manual test succeeded on 2026-09-06 and the user then explicitly started
 automatic ECO purchasing. Follow the ECO sections in GO_V2_SPEC.md for the three payment

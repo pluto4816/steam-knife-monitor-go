@@ -3,12 +3,19 @@
 A small Go Steam/CS2 knife-opportunity monitor for one process, one user, one SQLite database,
 and QQ official bot C2C notifications.
 
-Go V1 is frozen at tag `v1.0.0`. V2.1 and V2.2 are complete. V2.3 Phase 1 adds an
-explicitly enabled, single-platform C5GAME purchase phase with durable safety controls. Normal
-operation remains unchanged unless C5 purchasing is selected.
+Go V1 is frozen at tag `v1.0.0`. V2.1 and V2.2 are complete. V2.3 adds explicitly enabled
+purchasing with durable safety controls, initially for C5GAME and now extended to ECO.
+Automatic purchasing is off by default.
 
 C5 live testing is currently suspended because the user's API account cannot obtain purchase
 permission. The active alternative is ECO, with manual and automatic modes described below.
+
+The final purchase feature will offer both automatic and manual purchasing on each of BUFF,
+悠悠有品, C5, IGXE, and ECO. ECO is the current example: automatic purchasing runs in
+`monitor`/`once`, and manual `eco-purchase-test` currently targets one fixed P250 item.
+General manual item selection remains future work. No new purchase implementation for the
+other four platforms is started by this specification; existing C5 code is retained.
+See [the purchase product model](GO_V2_SPEC.md#purchase-product-model-five-platforms-two-purchase-channels).
 
 ## ECO automatic purchasing
 
@@ -128,8 +135,11 @@ The update mode does not call Steam Community Market.
 
 All normal modes load `./steam-candidates.json` by default. Use `-candidates PATH` to select a
 different catalog. They never download the ByMykel snapshot or run the smis.club candidate
-search implicitly. Steam price requests occur only in the C5 purchase phase, after a current
-A item passes the refreshed C5-lowest and CNY 1.00 prefilter.
+search implicitly. Steam price requests occur only in explicitly enabled C5 or ECO automatic
+purchase confirmation. A current A item must first pass the selected platform's refreshed
+SMIS lowest-price and CNY 1.00 prefilter; ECO also requires a valid official quote with stock
+and no price increase before Steam access. Candidate updates, targeted scans, due checks, and
+the manual C5/ECO purchase modes never call Steam.
 
 ### Preview
 

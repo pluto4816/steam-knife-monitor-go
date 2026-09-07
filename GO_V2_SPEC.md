@@ -152,8 +152,8 @@ The catalog contains only:
 
 It contains no credentials. `monitor`, `once`, and `preview` load this catalog at startup and
 fail clearly when it is missing, empty, or invalid. They never download the ByMykel snapshot,
-or run the smis.club candidate search implicitly. Steam price requests occur only when C5
-purchasing is explicitly enabled, under the V2.3 rules below.
+or run the smis.club candidate search implicitly. Steam price requests occur only in explicitly
+enabled C5 or ECO automatic purchase confirmation, under the platform-specific rules below.
 
 ## Targeted market scan
 
@@ -233,11 +233,61 @@ Historical samples and decision explanations, operational tooling, and evidence-
 changes remain possible later phases. They are not part of V2.1 or V2.2 and must not be
 implemented as part of the candidate-catalog work.
 
+## Purchase product model: five platforms, two purchase channels
+
+The finished purchase feature must offer both automatic purchasing and manual purchasing for
+each of the five existing market platforms: BUFF, 悠悠有品, C5, IGXE, and ECO. A platform
+identifies where the order is placed; a purchase channel identifies how it is initiated.
+These purchase channels are unrelated to the single QQ notification channel.
+
+| Platform | Final automatic channel | Final manual channel | Current scope |
+| --- | --- | --- | --- |
+| BUFF | Required | Required | Deferred |
+| 悠悠有品 | Required | Required | Deferred |
+| C5 | Required | Required | Existing automatic/manual test code retained; live testing suspended |
+| IGXE | Required | Required | Deferred |
+| ECO | Required | Required | Current implementation example for both channels |
+
+Automatic purchasing is explicitly enabled in `monitor` or `once`. It selects current A-tier
+catalog items after a complete scan (or validated recent monitor restart receipt) and successful
+due checks. It applies platform price and identity prefilters, confirms Steam price, requires
+base A without hysteresis, and then performs the live balance, reservation, submission, and
+order-verification steps. ECO also validates its official quote before Steam access, as specified
+below. `off`, `dry-run`, and `live` are automatic-channel settings, not extra purchase channels.
+
+Manual purchasing is an explicitly invoked, bounded purchase of a user-selected item on the
+selected platform. It runs once and exits independently of SMIS scans, tier eligibility,
+lowest-platform comparison, and Steam price confirmation. It retains the payment ceiling,
+balance check, daily budget, durable item reservation, unique merchant number, duplicate
+prevention, and unresolved-order reconciliation. Manual invocation never permits automatic
+resubmission of an ambiguous order.
+
+ECO is the current example: automatic purchasing uses `-eco-purchase off|dry-run|live` in
+`monitor`/`once`; manual purchasing uses `-mode eco-purchase-test`. The existing manual entry
+is limited to the fixed `P250 | Re.built (Field-Tested)` and records `MANUAL_TEST`; automatic
+orders record `AUTO`. General manual item selection belongs to the final product and is not
+yet implemented. This specification does not change current command names, the fixed test
+target, ledger kinds, or automatic stop-after-first-success behavior.
+
+Both channels must share durable purchase history and applicable budget accounting so that
+switching channels cannot bypass a reservation or duplicate-prevention rule. ECO's CNY 1.00
+order ceiling, CNY 10.00 Asia/Shanghai daily cap, conservative reservation accounting, and
+no-resubmission rules remain as specified below. Order creation does not prove Steam receipt;
+trade acceptance remains manual.
+
+This is the final product target, not a new implementation phase for the other four platforms.
+No new purchasing implementation for BUFF, 悠悠有品, C5, or IGXE is started now. Preserve
+existing C5 code and its suspended live-testing status. Each later platform phase must be
+explicitly started and document verified APIs and payment semantics before implementation.
+The target does not authorize new endpoints, simultaneous platform purchasing, a platform
+framework, or changes to current ECO/C5 mutual exclusion.
+
 ## V2.3 Phase 1 goal
 
 Add an explicitly enabled C5GAME purchase phase while preserving behavior when it is off and
 preserving the V2.2 scan-completeness boundary. This phase supports only C5GAME's documented
-OpenAPI and only the current single user. Other platforms remain out of scope.
+OpenAPI and only the current single user. The later ECO sections extend this implementation
+scope; the five-platform product target above does not activate the other platforms.
 
 The C5 integration is retained but live testing is suspended because the user reports that
 their C5 API account cannot obtain purchase permission. The explicitly authorized ECO manual
@@ -257,6 +307,11 @@ Phase 1 has fixed safety limits:
   automatic trade-offer acceptance is performed.
 
 ## Steam price verification
+
+Steam `/market/priceoverview/` is an automatic purchase-confirmation input for both C5 and
+ECO. The following C5 rules describe the original Phase 1 path; ECO's official quote and Steam
+confirmation order is specified in the ECO automatic purchase section below. Neither manual
+purchase mode calls Steam. Candidate updates, targeted scans, and due checks never call Steam.
 
 Targeted full scans and due checks always use only validated smis.club detail data. They never call
 Steam Community Market, even when `-c5-purchase dry-run` or `live` is enabled. Their persisted
@@ -281,8 +336,8 @@ payment-confirmation input; it does not replace ordinary SMIS state or alert dat
 screening input; it is not a payment amount or direct purchase limit. Steam requests are
 sequential and have no internal retry. An empty response, 401, 403, 429, challenge HTML,
 malformed response, unsuccessful response, missing price, or invalid currency prevents purchase
-and ends that purchase attempt without submitting to C5. When C5 purchasing is `off`, no Steam
-Community Market request is made.
+and ends that purchase attempt without submitting to C5. When both C5 and ECO automatic
+purchasing are `off`, no Steam Community Market request is made.
 
 ## C5 purchase eligibility and confirmation
 
