@@ -85,7 +85,7 @@ func NewWeb(s *Store, c WebConfig) (*Web, error) {
 		return nil, err
 	}
 	sum := sha256.Sum256([]byte("sales-session|" + c.Password))
-	t, err := template.New("page").Funcs(template.FuncMap{"money": Money, "ratio": Ratio, "token": randomToken}).Parse(pageHTML)
+	t, err := template.New("page").Funcs(template.FuncMap{"money": Money, "ratio": Ratio, "token": randomToken, "shortName": shortName}).Parse(pageHTML)
 	if err != nil {
 		return nil, err
 	}
@@ -260,7 +260,7 @@ func (w *Web) page(rw http.ResponseWriter, r *http.Request, csrf, message string
 		return
 	}
 	day := time.Now().In(time.FixedZone("Asia/Shanghai", 8*3600)).Format("2006-01-02")
-	d := pageData{Page: strings.TrimPrefix(path, "/"), Title: title, CSRF: csrf, Error: message, Today: day, Choices: w.choices, Sales: receipts, Query: strings.TrimSpace(r.URL.Query().Get("q")), Edit: Lot{Quantity: 1, Target: 6000, BoughtOn: day, Status: "held"}}
+	d := pageData{Page: strings.TrimPrefix(path, "/"), Title: title, CSRF: csrf, Error: message, Today: day, Choices: w.choices, Sales: receipts, Query: strings.TrimSpace(r.URL.Query().Get("q")), Edit: Lot{Quantity: 1, Target: 6500, BoughtOn: day, Status: "held"}}
 	id, _ := strconv.ParseInt(r.URL.Query().Get("edit"), 10, 64)
 	for _, l := range lots {
 		d.Count += l.Remaining()
@@ -312,6 +312,24 @@ func (w *Web) mutation(rw http.ResponseWriter, r *http.Request, csrf string) {
 		l.RefreshQuote = r.PostForm.Get("refresh_quote") == "yes"
 		l.ID, _ = intForm(r, "id")
 		l.Version, _ = intForm(r, "version")
+		l.KeepQuote = !r.PostForm.Has("quote")
+		preserveIdentity := false
+		if l.ID > 0 {
+			var lots []Lot
+			lots, err = w.store.Lots(r.Context())
+			for _, old := range lots {
+				if old.ID == l.ID && l.Name == shortName(old.Name) && l.HashName == old.HashName {
+					l.Name = old.Name // A shortened label must never rewrite historical identity.
+					preserveIdentity = true
+				}
+			}
+		}
+		if err == nil && (!preserveIdentity || r.PostForm.Get("catalog_item_id") != "") {
+			l.Name, l.HashName, err = w.resolveItem(l.Name, l.HashName, r.PostForm.Get("catalog_item_id"))
+		}
+		if err != nil {
+			break
+		}
 		if l.Quantity, err = intForm(r, "quantity"); err == nil {
 			l.UnitCost, err = ParseMoney(r.PostForm.Get("unit_cost"))
 		}
@@ -323,6 +341,15 @@ func (w *Web) mutation(rw http.ResponseWriter, r *http.Request, csrf string) {
 		}
 		if err == nil {
 			err = w.store.SaveLot(r.Context(), token, l)
+		}
+	case "/quote":
+		id, e1 := intForm(r, "id")
+		version, e2 := intForm(r, "version")
+		quote, e3 := ParseMoney(r.PostForm.Get("quote"))
+		if e1 != nil || e2 != nil || e3 != nil {
+			err = fmt.Errorf("请填写正确的参考价")
+		} else {
+			err = w.store.UpdateQuote(r.Context(), token, id, version, quote)
 		}
 	case "/sell":
 		id, e1 := intForm(r, "id")
@@ -357,6 +384,9 @@ func (w *Web) mutation(rw http.ResponseWriter, r *http.Request, csrf string) {
 	dest := "/holdings"
 	if r.URL.Path == "/sell" || r.URL.Path == "/void-sale" {
 		dest = "/history"
+	}
+	if r.URL.Path == "/quote" {
+		dest = "/sell-list"
 	}
 	http.Redirect(rw, r, dest, 303)
 }

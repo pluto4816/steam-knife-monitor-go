@@ -68,6 +68,7 @@ func Discount(cost, gross int64) (core.RatioBP, error) {
 
 type Lot struct {
 	RefreshQuote                       bool
+	KeepQuote                          bool // An edit without a quote field preserves the existing quote.
 	ID                                 int64
 	Name, HashName, Platform, BoughtOn string
 	Quantity, UnitCost, Sold, Quote    int64

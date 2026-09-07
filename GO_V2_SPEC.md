@@ -643,8 +643,13 @@ holdings, not inferred possession from platform order creation.
 Pages:
 
 - `/new`: enter or edit an actual purchase lot: exact identifying name, optional English market
-  name/platform, quantity, CNY unit cost, purchase date, target ratio, optional manually observed
-  Steam buyer-facing unit price, and held/listed state. Show total cost before submission.
+  name/platform, quantity, CNY unit cost, purchase date, target ratio, and held/listed state.
+  Search the persisted catalog with two or more characters and tap a match to resolve the full
+  canonical identity. Hide only the default Field-Tested wear suffix in labels, preserving exact
+  stored names. Do not guess among ambiguous matches. Manual entry remains available without a
+  catalog. The buy/edit form contains no Steam reference-price or quote-refresh field; editing
+  a lot preserves its existing quote and timestamp. Maintain quotes through a separate versioned,
+  idempotent form on `/sell-list`. Show total cost before submission.
 - `/holdings`: remaining quantity and cost by lot, target ratio/price, search, and edit links.
   Do not merge distinct purchase lots or silently average their costs.
 - `/sell-list`: remaining lots, target price, manually recorded quote and timestamp, estimated
@@ -668,8 +673,8 @@ Use exact integer fen and `core.RatioBP`; do not use float64 or deduct an extra 
 Do not round the intermediate Steam net value before computing a ratio. Display ratios with
 four decimals using the existing half-down convention. Compare target eligibility exactly,
 without rounded display values. Round target prices upward to fen. The default target ratio
-is 0.6000 and is editable per lot. The model estimates Steam balance; it does not claim to
-reproduce Steam's actual fee rounding. Actual receipts are entered net and are not divided
+is 0.6500 for new lots and is editable per lot. Existing lot targets remain unchanged. The model
+estimates Steam balance; it does not claim to reproduce Steam's actual fee rounding. Actual receipts are entered net and are not divided
 by 1.15 again. Never label Steam balance minus CNY purchase cost as cash profit.
 
 This new formula applies to the selling assistant. Existing monitoring classification and

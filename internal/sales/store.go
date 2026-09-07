@@ -150,6 +150,10 @@ func (s *Store) SaveLot(ctx context.Context, token string, l Lot) error {
 		if old.Version != l.Version {
 			return fmt.Errorf("记录已更新，请刷新后重新编辑")
 		}
+		if l.KeepQuote {
+			l.Quote, quoteAt = old.Quote, old.QuoteAt
+			l.RefreshQuote = false
+		}
 		// Preserve historical identity/cost once any receipt exists, including a voided receipt.
 		var count int
 		err = tx.QueryRowContext(ctx, `SELECT count(*) FROM sales_receipts WHERE lot_id=?`, l.ID).Scan(&count)
@@ -163,6 +167,22 @@ func (s *Store) SaveLot(ctx context.Context, token string, l Lot) error {
 			quoteAt = old.QuoteAt
 		}
 		_, err = tx.ExecContext(ctx, `UPDATE sales_lots SET name=?,hash_name=?,platform=?,bought_on=?,quantity=?,unit_cost=?,quote=?,quote_at=?,target=?,status=?,version=version+1 WHERE id=?`, l.Name, l.HashName, l.Platform, l.BoughtOn, l.Quantity, l.UnitCost, l.Quote, quoteAt, l.Target, l.Status, l.ID)
+		return err
+	})
+}
+func (s *Store) UpdateQuote(ctx context.Context, token string, id, version, quote int64) error {
+	if quote < 1 || quote > MaxMoney {
+		return fmt.Errorf("参考价必须为有效的正数")
+	}
+	return s.mutate(ctx, token, fmt.Sprintf("quote:%d", id), func(tx *sql.Tx) error {
+		result, err := tx.ExecContext(ctx, `UPDATE sales_lots SET quote=?,quote_at=?,version=version+1 WHERE id=? AND version=?`, quote, time.Now().UTC().Format(time.RFC3339), id, version)
+		if err != nil {
+			return err
+		}
+		n, err := result.RowsAffected()
+		if err == nil && n != 1 {
+			return fmt.Errorf("记录已更新或不存在，请刷新后重新核价")
+		}
 		return err
 	})
 }

@@ -283,8 +283,15 @@ func TestTemplatesHaveUniqueSubmissionTokens(t *testing.T) {
 	cookie := login.Result().Cookies()[0]
 	r := request(w, "GET", "/sell-list", nil, cookie, "")
 	matches := regexp.MustCompile(`name="request_token" value="([a-f0-9]+)"`).FindAllStringSubmatch(r.Body.String(), -1)
-	if len(matches) != 2 || matches[0][1] == matches[1][1] {
+	if len(matches) != 4 {
 		t.Fatal(fmt.Sprintf("tokens: %v", matches))
+	}
+	seen := map[string]bool{}
+	for _, match := range matches {
+		if seen[match[1]] {
+			t.Fatal("duplicate form token")
+		}
+		seen[match[1]] = true
 	}
 }
 

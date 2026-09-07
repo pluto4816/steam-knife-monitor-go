@@ -15,6 +15,7 @@
 /sales-test.db-journal
 /sales-test.db-shm
 /sales-test.db-wal
+/.sales-lan-test/
 
 # Local ECO credentials (never commit private key material).
 /.eco/
