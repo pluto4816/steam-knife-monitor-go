@@ -17,6 +17,103 @@ General manual item selection remains future work. No new purchase implementatio
 other four platforms is started by this specification; existing C5 code is retained.
 See [the purchase product model](GO_V2_SPEC.md#purchase-product-model-five-platforms-two-purchase-channels).
 
+## 出售辅助：手机四页账本
+
+当前新增 `-mode sales`：独立运行“新增买入、持仓、待售清单、买卖记录”四个页面。
+购买开发暂缓。本模式只处理你手工登记的数据，不运行监控、购买、Steam 查询或 QQ
+通知。QQ 日报和消息录入尚未实现。无候选目录也能运行；已有目录用于物品名称建议。
+
+- **新增买入**：按批次填写物品（包含磨损和特殊版本）、数量、人民币买入单价、日期、
+  目标挂刀比例；购买平台和 Steam 参考单价可选。保存前显示数量 × 单价的总成本。
+- **持仓**：查看剩余数量、成本和目标售价，按名称/平台搜索，编辑买入信息。
+- **待售清单**：查看目标售价、预计 Steam 到账、参考折扣和报价记录时间；可以标记已挂售，
+  实际成交后登记售出数量与本次**合计实际到账 Steam 余额**。部分售出自动扣减持仓。
+- **买卖记录**：保留买入批次和实际售出记录。误录的售出可以作废，恢复数量并留下记录。
+  已有售出记录的批次不能改写原买入成本、数量、身份和日期，避免改变历史计算。
+
+出售辅助采用你指定的模型：
+
+```text
+挂刀比例 = 买入单价 / (Steam 买家支付单价 / 1.15)
+目标 Steam 售价 = 买入单价 * 1.15 / 目标挂刀比例
+实际挂刀比例 = 已售部分买入成本 / 实际总到账 Steam 余额
+```
+
+例如买入单价 ¥0.60、目标比例 0.6000，则目标 Steam 售价为 ¥1.15，模型预计每件到账
+¥1.00。目标售价向上取整到分；计算不使用浮点数或额外最低扣费。默认目标 0.6000 可编辑。
+预计到账不承诺与 Steam 实际费用取整完全一致，真实到账直接填写，不再除以 1.15。
+人民币成本和 Steam 余额分开显示，不将差额称为现金利润。原监控/C5/ECO 算法暂未修改。
+
+参考报价仅手动维护。超过 24 小时显示“待核价”；可勾选“我刚核实过参考价”刷新相同
+价格的记录时间。不会轮询 Steam，也不会因刷新页面产生外部市场请求。
+
+### 本机启动
+
+```bash
+go build -o monitor ./cmd/monitor
+read -rsp '设置访问密码（至少 16 个字符）: ' SALES_PASSWORD
+export SALES_PASSWORD
+./monitor -mode sales -db ./steam-knife-monitor.db
+```
+
+在同一机器打开 `http://127.0.0.1:8080`，使用该密码登录。会话有效期 12 小时。
+默认地址只供本机使用，不能直接在手机访问。数据写入 `sales_*` 表，不读取或改写购买、
+扫描账本；本阶段使用一个 `sales` 进程即可。测试时可通过 `-db ./sales-test.db` 隔离数据。
+
+### 手机 HTTPS 访问
+
+如果服务器已有域名和 HTTPS 反向代理，将该域名的请求转发到 `127.0.0.1:8080`：
+
+```bash
+./monitor -mode sales -db ./steam-knife-monitor.db \
+  -sales-listen 127.0.0.1:8080 \
+  -sales-origin https://sales.example.com
+```
+
+把示例域名替换成手机实际访问的域名。代理需要保留原始 `Origin` 请求头。该参数是完整
+访问源（协议、域名、可选端口），不带路径或末尾斜杠；不匹配的表单请求会被拒绝。
+
+也可以让 Go 直接提供 HTTPS（需要与域名匹配、手机信任的证书和私钥）：
+
+```bash
+./monitor -mode sales -db ./steam-knife-monitor.db \
+  -sales-listen :8443 -sales-origin https://sales.example.com:8443 \
+  -sales-tls-cert /absolute/path/fullchain.pem \
+  -sales-tls-key /absolute/path/privkey.pem
+```
+
+此时手机打开 `https://sales.example.com:8443`。不要把带登录信息的服务通过公网明文
+HTTP 暴露；程序也会拒绝非回环地址的明文监听。候选目录、域名、证书均不会自动申请。
+
+### 长期运行和备份
+
+可用 systemd 用户服务管理进程。下面以本项目目录为例，将二进制和工作目录改为实际路径。
+先将 `SALES_PASSWORD=你的长密码` 存入 `~/.config/steam-sales.env`，文件权限设为 `600`，
+不要加入 Git。创建 `~/.config/systemd/user/steam-sales.service`：
+
+```ini
+[Unit]
+Description=Steam selling assistant
+
+[Service]
+WorkingDirectory=%h/steam-knife-monitor-go
+EnvironmentFile=%h/.config/steam-sales.env
+ExecStart=%h/steam-knife-monitor-go/monitor -mode sales -db ./steam-knife-monitor.db -sales-origin https://sales.example.com
+Restart=on-failure
+RestartSec=5
+UMask=0077
+
+[Install]
+WantedBy=default.target
+```
+
+将访问域名改好并配置 HTTPS 代理后，运行 `systemctl --user daemon-reload` 和
+`systemctl --user enable --now steam-sales`。通过 `journalctl --user -u steam-sales` 查看日志。
+如需退出 SSH 后仍开机运行，由服务器管理员为该用户启用 linger。
+
+定期在服务停止时备份所选 SQLite 文件，或使用 SQLite 在线备份工具；不要只复制运行中的
+数据库主文件而忽略日志文件。改变 `-db` 会打开另一份账本，不会自动迁移原记录。
+
 ## ECO automatic purchasing
 
 The ECO manual purchase has succeeded. `monitor` and `once` now support

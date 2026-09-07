@@ -10,6 +10,11 @@
 /steam-knife-monitor.db-shm
 /steam-knife-monitor.db-wal
 /steam-candidates.json
+/monitor
+/sales-test.db
+/sales-test.db-journal
+/sales-test.db-shm
+/sales-test.db-wal
 
 # Local ECO credentials (never commit private key material).
 /.eco/

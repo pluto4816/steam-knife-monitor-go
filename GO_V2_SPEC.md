@@ -3,19 +3,54 @@
 ## Baseline
 
 Go V1 is frozen at commit `fa5157efb937c46fce4246e2b371c4d67207eb22` and local
-annotated tag `v1.0.0`. `GO_V1_SPEC.md` remains the source of truth for all existing
-classification, scheduling, persistence, data-access, and QQ delivery behavior.
+annotated tag `v1.0.0`. `GO_V1_SPEC.md` defines the baseline classification, scheduling,
+persistence, data-access, and QQ delivery behavior. Explicitly started provisions in this
+specification override earlier provisions only within their stated scope. All baseline rules
+not explicitly replaced remain in force; a later section does not override unrelated rules
+merely because it appears later in the file.
 
-V2 extends that verified behavior. It must not silently change V1 business rules.
+For example, V2.2 replaces the V2.1 global candidate/exchange scan with a persisted catalog and
+targeted detail reads. The ECO automatic section extends the earlier ECO manual-only scope.
+Historical phase descriptions do not undo these extensions. V2 must not silently change V1
+business rules. Resolve remaining material conflicts under the guidance in
+[AGENTS.md](AGENTS.md#source-of-truth), without weakening payment or safety controls.
+
+## Current scope and mode index
+
+See [AGENTS.md](AGENTS.md#current-scope-and-autonomous-work) for the current development scope
+and authorization boundaries. V2.1 and V2.2 are complete. Purchase work is paused; the active extension is the
+[V2.4 selling assistant](#v24-selling-assistant). ECO manual/automatic and C5 implementations
+are retained, with C5 live testing suspended.
+The [five-platform target](#purchase-product-model-five-platforms-two-purchase-channels) is a
+roadmap, not authorization to start deferred platforms or general manual item selection.
+
+| Mode | Current behavior and governing sections |
+| --- | --- |
+| `monitor` (default) | Long-running targeted scans and due checks, SQLite state, and QQ delivery; [scan and restart rules](#targeted-market-scan). |
+| `once` | One bounded production cycle; [mode semantics](#one-time-production-mode) and [current scan rules](#targeted-market-scan). |
+| `preview` | One targeted scan/processing cycle with fresh in-memory state and no QQ delivery; [preview isolation](#preview-mode). |
+| `update-candidates` | Explicit bounded catalog refresh; [candidate update](#manual-candidate-update) and [catalog validation](#candidate-catalog). |
+| `purchase-test` | Retained C5 manual command for one selected catalog item; [manual test rules](#manual-specified-item-purchase-test). C5 live testing remains suspended. |
+| `eco-purchase-test` | Fixed P250 manual command; [ECO manual rules](#eco-manual-single-item-purchase-test-started-2026-09-06). |
+| `sales` | Password-protected mobile holdings and selling assistant; [V2.4](#v24-selling-assistant). No external market, purchase, or QQ requests. |
+
+Automatic purchasing is off by default. `monitor` and `once` support the platform-specific
+`off|dry-run|live` flags under the [C5](#v23-phase-1-goal) and
+[ECO](#eco-automatic-purchase-phase-started-2026-09-06) sections. ECO and C5 cannot be enabled
+together. This index describes existing modes; all detailed eligibility, side-effect, and
+safety requirements in their linked sections remain mandatory.
 
 ## Design discipline
 
 Do not overdesign V2.
 
-- Work one explicitly selected phase at a time.
+- Keep new feature work within the explicitly authorized scope. Necessary fixes, tests, and
+  documentation for existing functionality may span completed phases without reopening them.
+  A direct user request to implement a phase supplies its development-scope authorization;
+  follow AGENTS.md for clarification and external-operation authorization boundaries.
 - Prefer the standard library, concrete types, and the existing packages.
 - Reuse the V1 scan, processing, SQLite, and notification paths instead of copying them.
-- Add only the smallest behavior required by the current phase.
+- Add only the smallest behavior required by the authorized task.
 - Do not introduce speculative abstractions, provider routing, worker pools, queues,
   microservices, an ORM, a web framework, a plugin system, or distributed coordination.
 - Continue to use `core.RatioBP` for ratio business logic and exact strings for prices.
@@ -24,10 +59,13 @@ Do not overdesign V2.
 
 ## V2.1 goal
 
-Add bounded execution modes so the program can be used manually without starting the
-long-running monitor.
+Historical V2.1 goal: add bounded execution modes so the program can be used manually without
+starting the long-running monitor. The mode semantics below remain applicable except where
+explicitly extended by later sections; the original scanning behavior was replaced by
+[V2.2 targeted scanning](#targeted-market-scan).
 
-The executable has three modes:
+V2.1 introduced these three modes; see the [current mode index](#current-scope-and-mode-index)
+for the full set now implemented:
 
 - `monitor`: the existing V1 long-running behavior and the default mode.
 - `once`: perform one bounded production cycle and exit.
@@ -36,13 +74,21 @@ The executable has three modes:
 
 ## One-time production mode
 
-`once` uses the configured SQLite database and the production QQ sender. It:
+`once` uses the configured SQLite database and the production QQ sender. The following is the
+V2.1 cycle before the optional purchase extensions:
 
-1. performs one full candidate and exchange scan;
+1. performs one full scan (originally candidate/exchange scanning; now the
+   [V2.2 targeted catalog scan](#targeted-market-scan), including its checkpoint rules);
 2. waits the configured detail-request delay;
 3. processes the item states that are due at that time;
 4. sends the pending durable alerts once; and
 5. prints a summary and exits.
+
+When automatic purchasing is enabled, the platform-specific purchase phase runs after successful
+due checks and before ordinary alerts. The [C5](#c5-purchase-eligibility-and-confirmation) and
+[ECO](#eco-automatic-purchase-phase-started-2026-09-06) rules apply, including the existing
+receipt and stop-after-first-success behavior described in the
+[purchase product model](#purchase-product-model-five-platforms-two-purchase-channels).
 
 It does not start the polling loop, schedule an internal retry, or wait for the next interval.
 QQ credentials remain mandatory. State transitions, pending alert creation, SENT marking, and
@@ -62,7 +108,8 @@ run immediately.
 `preview` performs the same bounded scan and processing path against a fresh in-memory SQLite
 database. It:
 
-- reads real smis.club data using the V1 endpoints and conservative delays;
+- reads real smis.club data using the [V2.2 targeted detail path](#targeted-market-scan)
+  and conservative delays;
 - does not open or modify the configured production database;
 - does not require QQ credentials, construct a QQ sender, call QQ, or mark an alert SENT;
 - reports scan counts, tier counts, due-check counts, and the pending alert messages that would
@@ -79,7 +126,8 @@ normal read requests to smis.club.
 
 ## V2.1 compatibility
 
-- Running the executable without a mode keeps the V1 `monitor` behavior.
+- Running the executable without a mode selects `monitor`; its V1 runtime is extended by the
+  targeted-scan/restart rules and explicitly enabled purchase behavior defined below.
 - `monitor` and `once` use the `-db` path; `preview` uses isolated in-memory SQLite.
 - Existing V1 timing defaults remain unchanged.
 - Absence, partial scans, and invalid market data remain unable to change a tier.
@@ -433,13 +481,20 @@ response must report a positive `actualPay` no greater than CNY 1.00. Its ledger
 
 ## ECO manual single-item purchase test (started 2026-09-06)
 
-The user has obtained ECO API and purchase permissions and authorized one live attempt for
-`P250 | Re.built (Field-Tested)` / `P250 | 重构 (久经沙场)`.
+Historical start: the user obtained ECO API and purchase permissions and authorized one live
+attempt for `P250 | Re.built (Field-Tested)` / `P250 | 重构 (久经沙场)`. The completed attempt
+and subsequent automatic-phase authorization are recorded in the
+[ECO automatic section](#eco-automatic-purchase-phase-started-2026-09-06).
+
+This section governs the manual command. Its isolation and fixed-target restrictions do not
+prohibit the separately started automatic mode; that mode's explicit extensions, including
+ledger migration and accounting, are defined in the linked automatic section. The manual
+command's restrictions remain in force.
 
 `-mode eco-purchase-test` is an isolated mode of the same executable. It requires C5 purchasing
 off, does not require the local candidate catalog, and performs no SMIS, Steam, C5, QQ,
 candidate collection, tier processing, or ordinary monitor work. The target identity is fixed;
-this phase adds no general platform routing or automatic ECO purchase phase.
+this command adds no general platform routing and does not run automatic ECO purchasing.
 
 Credentials are `ECO_PARTNER_ID`, `ECO_PRIVATE_KEY_FILE` (matching the public key registered
 with ECO), and `ECO_TRADE_URL`. Identity, private key, trade-link token, signatures, raw request
@@ -500,10 +555,13 @@ queries; isolated command routing; `gofmt`, `go test ./...`, and `go vet ./...`.
 
 ## ECO automatic purchase phase (started 2026-09-06)
 
-The manual test successfully placed a CNY 0.45 order and the user confirmed receipt. The user
+Historical start: the manual test successfully placed a CNY 0.45 order and the user confirmed receipt. The user
 then explicitly authorized integrating automatic ECO buying with the existing limits and
-duplicate-prevention controls. This section extends the manual-only boundary above. C5 live
-work remains suspended; do not introduce a platform framework.
+duplicate-prevention controls.
+
+This section defines the current automatic-mode requirements and explicitly extends the earlier
+manual-only boundary and shared ledger behavior. The manual command retains its fixed target
+and isolation. C5 live work remains suspended; do not introduce a platform framework.
 
 `-eco-purchase off|dry-run|live` defaults to off. Only `monitor` and `once` accept dry-run/live.
 ECO and C5 purchasing cannot be enabled together. `preview`, `update-candidates`, C5
@@ -571,3 +629,69 @@ no payment inputs in scans or due checks; no purchase after incomplete scans or 
 checks; dry-run without payment writes; old manual order preservation and repeat exclusion;
 transactional budget and item checks; submission ambiguity and restart reconciliation; exact
 quote ceiling/signature tests; and successful existing regression tests, gofmt and go vet.
+
+
+## V2.4 selling assistant
+
+The user explicitly started a four-page mobile web assistant while pausing purchasing work.
+Use the same Go executable in isolated `-mode sales`, standard-library HTTP/templates, and
+SQLite. Do not start the monitor or call Steam, SMIS, purchase platforms, or QQ in this mode.
+QQ reports, message-based input, and automatic listing remain deferred. The candidate catalog
+is optional for name suggestions; manual entry must work without it. Record only user-entered
+holdings, not inferred possession from platform order creation.
+
+Pages:
+
+- `/new`: enter or edit an actual purchase lot: exact identifying name, optional English market
+  name/platform, quantity, CNY unit cost, purchase date, target ratio, optional manually observed
+  Steam buyer-facing unit price, and held/listed state. Show total cost before submission.
+- `/holdings`: remaining quantity and cost by lot, target ratio/price, search, and edit links.
+  Do not merge distinct purchase lots or silently average their costs.
+- `/sell-list`: remaining lots, target price, manually recorded quote and timestamp, estimated
+  Steam balance, and ratio. A quote older than 24 hours requires rechecking; missing/stale quotes
+  are never presented as currently eligible. An explicit user recheck can refresh an unchanged
+  quote's timestamp. Register actual sold quantity and actual total Steam balance credited.
+- `/history`: purchase lots and sale receipts, realized cost-to-balance ratios, and explicit
+  correction of erroneous sale registrations. Voiding a receipt restores quantity atomically
+  and preserves the original receipt as voided; it performs no external cancellation.
+
+The user-specified selling-assistant model is:
+
+```text
+ratio = purchase unit cost / (Steam buyer-facing unit price / 1.15)
+target Steam unit price = purchase unit cost * 1.15 / target ratio
+target Steam net balance per item = purchase unit cost / target ratio
+realized ratio = cost of sold units / actual total Steam balance received
+```
+
+Use exact integer fen and `core.RatioBP`; do not use float64 or deduct an extra fee floor.
+Do not round the intermediate Steam net value before computing a ratio. Display ratios with
+four decimals using the existing half-down convention. Compare target eligibility exactly,
+without rounded display values. Round target prices upward to fen. The default target ratio
+is 0.6000 and is editable per lot. The model estimates Steam balance; it does not claim to
+reproduce Steam's actual fee rounding. Actual receipts are entered net and are not divided
+by 1.15 again. Never label Steam balance minus CNY purchase cost as cash profit.
+
+This new formula applies to the selling assistant. Existing monitoring classification and
+C5/ECO purchase calculations are unchanged pending separate confirmation of a global change.
+
+Persist only prefixed `sales_*` tables in this mode. It may use the configured SQLite file but
+must not initialize or mutate monitoring/purchase tables. Validate quantity/monetary bounds,
+positive costs/receipts, and dates. Dates use Asia/Shanghai; quote timestamps use UTC. Remaining
+quantity must never be negative. Use transactional mutations, per-form unique submission tokens,
+and optimistic versions to prevent duplicate submissions and stale concurrent edits. Preserve
+historical purchase identity/cost/quantity/date once a sale receipt exists, even if voided.
+Allow quote/target/status updates without rewriting realized costs.
+
+Require `SALES_PASSWORD` (at least 16 characters), signed expiring HttpOnly/SameSite cookies,
+CSRF tokens, exact browser Origin validation, escaped templates, and bounded request bodies.
+Public browser access uses HTTPS; direct plaintext listening is restricted to loopback. Support
+TLS certificate/key flags or loopback behind an existing HTTPS reverse proxy. Do not infer an
+HTTPS connection from arbitrary forwarded headers. Set Secure cookies for HTTPS origins. Do
+not log credentials. Five failed logins trigger a one-minute login cooldown for this single-user
+service. Persist ledger data across restarts and shut down HTTP gracefully on termination.
+
+Acceptance: exact formula/rounding boundaries; partial-sale accounting; durable idempotence;
+concurrent over-sale/stale-edit rejection; preserved history after corrections/restarts;
+authentication/CSRF/origin/XSS checks; all four pages usable on mobile; mode isolation;
+`gofmt`, `go test ./...`, and `go vet ./...`.

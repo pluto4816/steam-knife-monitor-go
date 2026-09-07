@@ -2,13 +2,74 @@
 
 ## Source of truth
 
-Before changing code or tests, read `GO_V1_SPEC.md` and `GO_V2_SPEC.md`. V1 remains the source
-of truth for existing business rules and production behavior. V2 defines only the explicitly
-started extension phase.
+`GO_V1_SPEC.md` defines the baseline business rules. Explicitly started provisions in
+`GO_V2_SPEC.md` override earlier behavior only within their stated scope; all other baseline
+rules remain in force. For example, V2.2 targeted scans replace the earlier global exchange
+scan. Historical phase descriptions do not undo explicitly documented later extensions.
+
+When first working in this repository, understand the baseline and current scope below. Before
+changing code or tests, read the relevant specification sections and their dependent rules using
+the index below. Unchanged material already read in the same session need not be reread. For payment
+changes, review the selected platform's complete eligibility, budget, durability, and
+reconciliation rules. Referenced requirements remain mandatory even when not repeated here.
+
+If a material specification conflict remains unresolved, clarify the affected requirement;
+continue independent authorized work. Never resolve a payment or safety conflict by silently
+weakening a control.
 
 The sibling Python repository is frozen reference material only. It may be read for verified
 requirements, API findings, and test cases, but must not be modified unless the user explicitly
 asks.
+
+## Current scope and autonomous work
+
+Go V1 is frozen at tag `v1.0.0`; V2.1 and V2.2 are complete. Purchase development/discussion is paused. The active work is the explicitly started four-page
+selling assistant, documented in [V2.4](GO_V2_SPEC.md#v24-selling-assistant).
+Existing ECO manual and automatic purchasing remain implemented. Preserve existing C5 implementation; C5 live testing
+remains suspended. ECO and C5 purchasing remain mutually exclusive. ECO manual purchasing
+still targets the fixed P250 test item; general manual item selection has not started.
+
+The final product target includes automatic and manual purchasing for BUFF, 悠悠有品, C5,
+IGXE, and ECO. That target does not start new purchasing work on the other four platforms,
+authorize new endpoints, or authorize a multi-platform framework. Historical market sampling and other
+deferred V2 work have not started; the explicitly started manual holdings ledger is in scope. Use this section as the current-scope summary and the linked
+specification sections for behavior and acceptance criteria.
+
+Within an authorized task, complete necessary cross-package fixes, relevant tests, and
+documentation updates without reopening completed phases. A direct user request to implement
+a phase supplies its development-scope authorization; do not require a separate ceremonial
+confirmation. Resolve routine implementation choices autonomously and ask only when a material
+ambiguity or missing authorization prevents the dependent work. Existing session authorization
+continues to apply within its scope.
+
+Development authorization alone does not authorize live payments, external messages, or production
+operations. Check the user's task and existing session authorization before those actions; do not
+request approval again when they are already covered. Credentials or example commands alone are
+not authorization. Sandbox and permission approvals still apply.
+
+## Specification index
+
+- Core classification, hysteresis, timing, trends, and notifications:
+  [V1 specification](GO_V1_SPEC.md).
+- Modes and preview isolation: [V2.1](GO_V2_SPEC.md#v21-goal), with scanning superseded by
+  [V2.2 targeted market scan](GO_V2_SPEC.md#targeted-market-scan).
+- Candidate refresh and catalog validation:
+  [manual candidate update](GO_V2_SPEC.md#manual-candidate-update) and
+  [candidate catalog](GO_V2_SPEC.md#candidate-catalog).
+- Checkpoints, complete-catalog validation, restart receipts, and scan phase boundaries:
+  [targeted market scan](GO_V2_SPEC.md#targeted-market-scan).
+- Purchase scope and channel semantics:
+  [purchase product model](GO_V2_SPEC.md#purchase-product-model-five-platforms-two-purchase-channels).
+- C5 automatic confirmation, limits, and reconciliation: [V2.3 Phase 1](GO_V2_SPEC.md#v23-phase-1-goal)
+  through its acceptance criteria; manual exception:
+  [manual specified-item purchase test](GO_V2_SPEC.md#manual-specified-item-purchase-test).
+- ECO credentials, endpoints, manual limits, and reconciliation:
+  [ECO manual test](GO_V2_SPEC.md#eco-manual-single-item-purchase-test-started-2026-09-06);
+  automatic quote ordering, migration, and shared accounting:
+  [ECO automatic phase](GO_V2_SPEC.md#eco-automatic-purchase-phase-started-2026-09-06).
+
+- Manual holdings, selling targets, actual sale receipts, and mobile web access:
+  [V2.4 selling assistant](GO_V2_SPEC.md#v24-selling-assistant).
 
 ## Product constraints
 
@@ -18,7 +79,7 @@ SQLite, and one Go executable. QQ official bot C2C messaging is the only notific
 Prefer standard-library functions and concrete types. Add an interface only when there are two
 current implementations or when testing an external side effect clearly requires one.
 
-Do not overdesign. Work one phase at a time, implement only the current specification, and do
+Do not overdesign. Implement only the authorized scope under the applicable specification, and do
 not introduce microservices, queues, worker pools, leases, distributed coordination, an ORM, a
 web framework, dependency-injection framework, dynamic plugin system, event bus, or speculative
 abstractions. The V2.2 candidate-source collector is an isolated built-in manual mode, not a
@@ -30,12 +91,11 @@ should remain exact strings until the real API representation is confirmed.
 ## Data access
 
 Use only the smis.club endpoints and fields already verified in the frozen Python findings.
-V2.2 may also read only the ByMykel CSGO-API flat English skin-definition snapshot and fields
-documented in `GO_V2_SPEC.md`. V2.3 Phase 1 may use only the documented C5GAME OpenAPI balance,
-quick-buy, and order-detail endpoints plus Steam Community Market's Steam-hosted
-`/market/priceoverview/` endpoint exactly as documented in the V2.3 specification. Treat the
-definition snapshot as mutable input derived from CS2 game definitions, not as Steam
-market-state evidence.
+Candidate updates may also read the ByMykel CSGO-API flat English skin-definition snapshot and
+fields documented in V2.2. Purchase modes may use only the C5GAME, ECO, and Steam
+`/market/priceoverview/` endpoints permitted for that mode by the indexed specifications.
+Treat the definition snapshot as mutable input derived from CS2 game definitions, not as
+Steam market-state evidence.
 
 Favor low-frequency, sequential, batched, and cached access. Do not bypass access controls,
 CAPTCHA, Cloudflare, rate limits, or other site restrictions. Stop or back off on empty
@@ -45,99 +105,53 @@ The ByMykel snapshot collector runs only in explicit `update-candidates` mode. N
 the persisted catalog, make no ByMykel requests, and make no Steam Community Market requests
 during targeted full scans or due checks. They must not paginate the global smis.club exchange
 endpoint. They fetch only verified smis.club single-item details for catalog IDs. The only Steam
-Community Market exceptions are automatic C5 purchase confirmation below and automatic ECO
-purchase confirmation as specified in GO_V2_SPEC.md;
-`/market/priceoverview/` must never be used for candidate collection, global scanning, ordinary
-tier persistence, or due-check processing.
+Community Market exceptions are automatic C5 and ECO purchase confirmation under their indexed
+platform specifications. `/market/priceoverview/` must never be used for candidate collection,
+global scanning, ordinary tier persistence, or due-check processing.
 
 Absence is not market-state evidence. Only successfully parsed and validated MarketData may
 change a tier. A failed candidate update must preserve the prior valid catalog.
 
-Targeted full scans persist a single-process checkpoint only after an item's validated state is
-saved. A retry may resume only when the checkpoint matches the exact ordered candidate catalog;
-catalog changes invalidate old progress. An incomplete scan must still perform no due-check or
-notification phase.
+Scans cover all items in the current persisted catalog; no historical candidate count is a
+fixed requirement. Preserve exact catalog fingerprint, count, identity, and checkpoint checks.
+Incomplete scans must not reach due checks, notifications, or purchases. Only `monitor` may
+use the specified recent-completion restart shortcut; `once` and `preview` may not. Follow the
+indexed targeted-scan specification for checkpoint persistence and 24-hour scheduling.
 
-A successful targeted full scan also persists its catalog fingerprint, candidate count, and
-completion time. On `monitor` restart only, the initial full scan may be skipped when that
-durable completion is less than 24 hours old, its fingerprint and count match the exact current
-catalog, every catalog identity has exactly one persisted state, and no checkpoint exists.
-The next 24-hour full scan remains anchored to the persisted completion time. A failed check
-must perform the normal full scan; `once` and `preview` never use this restart shortcut.
+## Payment safety
 
-## C5 purchase price-confirmation flow
+Follow the indexed platform specifications for the exact decision order and manual exceptions.
+Automatic purchases require complete scan evidence (or a validated monitor restart receipt),
+successful due checks, current A-tier candidates, exact identity, and the selected platform as
+the lowest positive SMIS price at or below CNY 1.00. Exclude handled or otherwise ineligible
+items before Steam access. ECO additionally validates its official quote before Steam access.
+Steam confirmation must yield a positive exact CNY price and recomputed base A without
+hysteresis. Failure or restriction prevents purchase. Confirmation prices never replace ordinary
+SMIS tier state; SMIS transaction volume is screening evidence, not a payment amount.
 
-The payment path is fixed and must remain in this order:
+Preserve the CNY 1.00 per-order ceiling, CNY 10.00 Asia/Shanghai daily limit, balance checks,
+durable item and budget reservation before submission, unique merchant numbers, duplicate
+prevention, and original-order reconciliation. Ambiguous orders must never be automatically
+resubmitted or have their reservations cleared to enable another attempt. Preserve ECO/C5
+shared budget and duplicate checks, existing ledger rows during migrations, and automatic
+stop-after-first-success behavior. Order creation is not proof of Steam receipt.
 
-```text
-SMIS scans the 426 persisted candidates, or a restarting monitor verifies the durable recent
-  full-scan completion and all 426 persisted identities
-→ run due checks using SMIS and use SMIS transaction volume and prices for preliminary
-  classification
-→ obtain current A-tier candidates
-→ in the purchase phase, refresh SMIS detail and require C5 to be the lowest positive platform
-→ require the exact C5 price to be no greater than CNY 1.00
-→ only for a candidate that could now actually be purchased, call Steam Community Market
-  `/market/priceoverview/` once for its exact `market_hash_name`
-→ use Steam `lowest_price` to recompute `core.RatioBP` exactly
-→ require the recomputed evidence to satisfy the base A rule without hysteresis
-→ in live mode, query the C5 balance
-→ durably reserve the item and budget, then submit the C5 quick-buy request
-```
+C5 and ECO manual modes retain their specified eligibility exceptions and durable safety
+controls; neither calls SMIS or Steam. Automatic dry-run follows its platform's confirmation
+rules but makes no balance query, purchase-ledger mutation, or purchase submission. C5 dry-run
+makes no C5 request; ECO dry-run requires credentials for its signed quote. The surrounding
+`monitor`/`once` still has ordinary SQLite and QQ effects.
 
-`/market/priceoverview/` is a payment-confirmation input only. Targeted full scans and due checks
-must not call it; they continue to use validated smis.club `steamSellPrice` and
-`steamTransactionQuantity`. A current A-tier item that is not C5-lowest, has a C5 price above
-CNY 1.00, has already been handled, or otherwise cannot be purchased must be excluded before any
-Steam price request. Dry-run follows the same prefilter and Steam reprice decision but performs
-no C5 balance query, ledger mutation, or quick-buy.
+Use only the documented platform endpoints and credential handling from the indexed sections.
+Never commit or log credentials or other sensitive payment material. Do not add recharge,
+withdrawal, Steam login/Guard actions, or automatic trade acceptance.
 
-Steam price failure, absence, invalid currency, restriction, or a recomputed non-A result must
-prevent purchase. Steam transaction volume remains a smis.club screening input and is never a
-payment amount. Do not restore global Steam Community Market search or pagination.
+## Development and verification boundaries
 
-## Manual specified-item purchase test
-
-The explicit `purchase-test` mode is a narrow exception to the automatic price-confirmation
-flow above. It selects exactly one existing catalog item by `item_id`, runs once, and exits.
-It does not call SMIS or Steam, does not require persisted SMIS identity or tier state, and does
-not compare C5 with other platforms. Its sole market-price eligibility rule is a C5 quick-buy
-`maxPrice` fixed at CNY 1.00; a successful `actualPay` must also be positive and no greater than
-that ceiling.
-
-This mode is live-only and must retain the C5 balance check, CNY 1.00 per-order ceiling, CNY
-10.00 daily budget, durable per-item reservation, unique `outTradeNo`, unresolved-order
-reconciliation, and no automatic resubmission after ambiguity. Ledger rows use
-`purchase_kind=MANUAL_TEST`. It must not change the behavior of `monitor`, `once`, dry-run,
-scans, due checks, or automatic C5 purchasing.
-
-## Development phases
-
-The final purchase product has automatic and manual channels for each of BUFF, 悠悠有品,
-C5, IGXE, and ECO, as specified in GO_V2_SPEC.md. ECO is the current example for both channels;
-its manual command still targets the fixed P250 test item. This target does not start new
-purchasing work for the other four platforms or a general manual item selector. Preserve
-existing C5 code and current platform mutual exclusion; do not infer authorization for new
-endpoints or a multi-platform framework.
-
-The ECO single-item manual test succeeded on 2026-09-06 and the user then explicitly started
-automatic ECO purchasing. Follow the ECO sections in GO_V2_SPEC.md for the three payment
-endpoints and the official single-name BatchSearchSellingPrice quote endpoint, credential
-handling, CNY 1.00 order ceiling, CNY 10.00 daily limit, and durable no-resubmission behavior.
-This exception allows `-eco-purchase dry-run|live` only in monitor/once and preserves the manual
-`eco-purchase-test`. Ordinary scans and due checks still use only SMIS. Steam is called only
-after the ECO purchase prefilter and official quote validation. C5 live testing is suspended;
-ECO and C5 purchasing are mutually exclusive. Do not build a multi-platform framework.
-
-Go V1 is frozen at tag `v1.0.0`. Go Core, Collector, SQLite, Scan Cycle, Detail Market Fetch,
-Tier Scheduler, the long-running runtime, Notification Phase 1, and the QQ official sender are
-complete.
-
-V2.1 and V2.2 are complete. V2.3 Phase 1 C5GAME purchase safety and durability are the current
-extension. Historical storage and later V2 ideas have not started.
-
-Do not add another delivery provider, multiple-channel routing, goroutine workers, queues, web
-UI, Docker, or CI unless the user explicitly starts that phase. The production sender uses only
+The V2.4 mobile web UI and its HTTP request handling are explicitly started; use standard-library
+net/http and html/template within the same executable. Do not add another delivery provider,
+multiple-channel routing, background worker pools, queues, unrelated web UI, Docker, or CI unless
+the user explicitly starts that phase. The production sender uses only
 the QQ HTTP Access Token and active C2C message APIs; do not add the binding probe's WebSocket
 Gateway code to the production program.
 

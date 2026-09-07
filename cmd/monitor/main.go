@@ -36,6 +36,7 @@ const (
 	modeUpdateCandidates executionMode = "update-candidates"
 	modePurchaseTest     executionMode = "purchase-test"
 	modeECOTest          executionMode = "eco-purchase-test"
+	modeSales            executionMode = "sales"
 )
 
 type executionMode string
@@ -48,6 +49,10 @@ type commandConfig struct {
 	C5Purchase    app.C5PurchaseMode
 	C5ItemID      int64
 	ECOPurchase   app.ECOPurchaseMode
+	SalesListen   string
+	SalesOrigin   string
+	SalesCert     string
+	SalesKey      string
 }
 
 var defaultRunConfig = app.RunConfig{
@@ -73,6 +78,10 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	if config.Mode == modeSales {
+		return runSales(ctx, config)
+	}
 
 	httpClient := &http.Client{Timeout: httpTimeout}
 	if config.Mode == modeECOTest {
@@ -287,7 +296,11 @@ func parseCommandConfig(args []string) (commandConfig, error) {
 	flags := flag.NewFlagSet("monitor", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	mode := string(config.Mode)
-	flags.StringVar(&mode, "mode", mode, "execution mode: monitor, once, preview, update-candidates, purchase-test, or eco-purchase-test")
+	flags.StringVar(&mode, "mode", mode, "execution mode: monitor, once, preview, update-candidates, purchase-test, eco-purchase-test, or sales")
+	flags.StringVar(&config.SalesListen, "sales-listen", "", "sales server address (default 127.0.0.1:8080)")
+	flags.StringVar(&config.SalesOrigin, "sales-origin", "", "exact browser origin, e.g. https://sales.example.com")
+	flags.StringVar(&config.SalesCert, "sales-tls-cert", "", "TLS certificate PEM file")
+	flags.StringVar(&config.SalesKey, "sales-tls-key", "", "TLS private key PEM file")
 	flags.StringVar(&config.DBPath, "db", config.DBPath, "SQLite database path")
 	flags.StringVar(&config.CandidatePath, "candidates", config.CandidatePath, "candidate catalog JSON path")
 	flags.BoolVar(&config.NotifyEmpty, "notify-empty", false, "send a QQ message after a successful one-time scan with no A-tier candidates")
@@ -304,10 +317,10 @@ func parseCommandConfig(args []string) (commandConfig, error) {
 	}
 	config.Mode = executionMode(mode)
 	switch config.Mode {
-	case modeMonitor, modeOnce, modePreview, modeUpdateCandidates, modePurchaseTest, modeECOTest:
+	case modeMonitor, modeOnce, modePreview, modeUpdateCandidates, modePurchaseTest, modeECOTest, modeSales:
 	default:
 		return commandConfig{}, fmt.Errorf(
-			"invalid mode %q: want monitor, once, preview, update-candidates, purchase-test, or eco-purchase-test",
+			"invalid mode %q: want monitor, once, preview, update-candidates, purchase-test, eco-purchase-test, or sales",
 			mode,
 		)
 	}
@@ -326,6 +339,13 @@ func parseCommandConfig(args []string) (commandConfig, error) {
 		if config.DBPath == "" || strings.ContainsAny(config.DBPath, ":?\x00") {
 			return commandConfig{}, fmt.Errorf("ECO requires a durable SQLite file path")
 		}
+	}
+	if config.Mode == modeSales {
+		if config.C5Purchase != app.C5PurchaseOff || config.ECOPurchase != app.ECOPurchaseOff {
+			return commandConfig{}, fmt.Errorf("sales mode requires purchasing off")
+		}
+	} else if config.SalesListen != "" || config.SalesOrigin != "" || config.SalesCert != "" || config.SalesKey != "" {
+		return commandConfig{}, fmt.Errorf("sales web flags require -mode sales")
 	}
 	if config.Mode == modeECOTest && config.C5Purchase != app.C5PurchaseOff {
 		return commandConfig{}, fmt.Errorf("eco-purchase-test requires -c5-purchase off")
@@ -359,7 +379,7 @@ func parseCommandConfig(args []string) (commandConfig, error) {
 }
 
 func senderForMode(mode executionMode, httpClient *http.Client) (app.Sender, error) {
-	if mode == modePreview || mode == modeUpdateCandidates || mode == modeECOTest {
+	if mode == modePreview || mode == modeUpdateCandidates || mode == modeECOTest || mode == modeSales {
 		return nil, nil
 	}
 	return newQQSenderFromEnv(httpClient)
